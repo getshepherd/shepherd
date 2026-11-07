@@ -2,7 +2,7 @@
 //! `EditorState`, colored by `zeron_syntax` through a highlighter that shifts its spans with each edit until the next
 //! highlight lands. Its colors are the panes' (`crate::ui::markdown::syntax_color`), not Zeron's palette.
 use crate::theme::Theme;
-use gpui::{AppContext as _, Context, DispatchPhase, Entity, HighlightStyle, IntoElement, ScrollWheelEvent, SharedString, Styled as _, Window, canvas, px};
+use gpui::{AppContext as _, Context, DispatchPhase, Entity, HighlightStyle, IntoElement, PlatformInput, ScrollDelta, ScrollWheelEvent, SharedString, Styled as _, Window, canvas};
 use gpui_base::input::{EditorState, FoldRange, HighlightStyleResolver, InputEdit, InputEditorStyle, InputHighlighter, Rope};
 use std::{cell::Cell, ops::Range, rc::Rc, sync::Arc};
 use zeron_syntax::{HighlightKind, HighlightedDocument};
@@ -142,24 +142,36 @@ pub(super) fn replace_file_contents<T: 'static>(editor: &Entity<EditorState>, te
     });
 }
 
-/// The terminal's wheel speed over the editor, which scrolls 1:1: laid over it, this takes the wheel first. Offsets
-/// land after the next layout, so a frame's events add up from the one before rather than the editor's stale offset.
-pub(super) fn terminal_wheel(editor: Entity<EditorState>) -> impl IntoElement {
+thread_local! {
+    /// A wheel event `terminal_wheel` sent on, for the editor itself.
+    static REPLAYING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The terminal's wheel speed over the editor, which scrolls 1:1: laid over it, this takes the wheel first and sends
+/// it on scaled, so the editor scrolls and clamps it itself (setting its offset would land unclamped after a layout).
+pub(super) fn terminal_wheel() -> impl IntoElement {
     canvas(
         |_, _, _| {},
-        move |bounds, _, window, _| {
-            let pending = Rc::new(Cell::new(None));
-            window.on_mouse_event(move |e: &ScrollWheelEvent, phase, _, cx| {
-                if phase != DispatchPhase::Capture || !bounds.contains(&e.position) {
+        |bounds, _, window, _| {
+            window.on_mouse_event(move |e: &ScrollWheelEvent, phase, window, cx| {
+                if phase != DispatchPhase::Capture || REPLAYING.get() || !bounds.contains(&e.position) {
                     return;
                 }
-                editor.update(cx, |state, cx| {
-                    let delta = e.delta.pixel_delta(state.line_height().unwrap_or(px(20.))) * crate::terminal::pane::WHEEL_SPEED;
-                    let at = pending.get().unwrap_or(state.scroll_offset()) + delta;
-                    pending.set(Some(at));
-                    state.set_scroll_offset(at, cx);
-                });
                 cx.stop_propagation();
+                let speed = crate::terminal::pane::WHEEL_SPEED;
+                let faster = ScrollWheelEvent {
+                    delta: match e.delta {
+                        ScrollDelta::Pixels(d) => ScrollDelta::Pixels(d * speed),
+                        ScrollDelta::Lines(d) => ScrollDelta::Lines(d * speed),
+                    },
+                    ..e.clone()
+                };
+                // not from here: the window's listeners are out while it dispatches
+                window.defer(cx, move |window, cx| {
+                    REPLAYING.set(true);
+                    window.dispatch_event(PlatformInput::ScrollWheel(faster), cx);
+                    REPLAYING.set(false);
+                });
             });
         },
     )

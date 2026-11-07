@@ -1301,7 +1301,7 @@ impl Render for FilePreview {
                         .text_size(px(theme.terminal_font_size))
                         .line_height(px((theme.terminal_font_size * theme.terminal_line_height).round()))
                         .child(gpui_base::input::Editor::new(&editor))
-                        .child(super::file_editor::terminal_wheel(editor.clone()))
+                        .child(super::file_editor::terminal_wheel())
                 });
                 div()
                     .flex_1()
