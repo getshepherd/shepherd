@@ -40,7 +40,7 @@ nav .links { margin-left: auto; display: flex; align-items: center; gap: 16px; f
 .nav-link { color: var(--dim); transition: color .15s; }
 .nav-link:hover { color: var(--ink); }
 .dl-lead a.inline { color: var(--accent); }
-.gh-stars { font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.gh-stars { white-space: nowrap; font-size: 13.5px; font-variant-numeric: tabular-nums; }
 
 /* ── buttons ── */
 .btn {
@@ -175,7 +175,8 @@ footer a:hover { color: var(--dim); }
 }
 @media (max-width: 600px) {
   .wrap { padding: 0 20px; }
-  .nav-inner { height: 58px; }
+  .nav-inner { height: 58px; gap: 12px; }
+  nav .links { gap: 10px; }
   .hero-grid { padding: 44px 20px 32px; text-align: left; }
   .hero-copy { margin: 0; }
   .hero .cta-row { justify-content: flex-start; }
@@ -187,4 +188,8 @@ footer a:hover { color: var(--dim); }
   .dl-list li { flex-wrap: wrap; row-gap: 8px; }
   .closing { margin: 80px 0 56px; }
   footer { padding: 20px 0 32px; }
+}
+/* The word "Shepherd" gives way to the icon alone on the narrowest phones, so the nav stays on one line. */
+@media (max-width: 400px) {
+  .logo { font-size: 0; }
 }
