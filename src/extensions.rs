@@ -251,17 +251,28 @@ pub fn set_start(ext: &Extension, start: &str) -> Result<(), String> {
     {
         stop(&mut run);
     }
-    install_with(&ext.binary, start)
+    run(&ext.binary, &["install", "--start", start])
 }
 
-/// `<binary> install --start <start>`, or what it said when it failed.
-fn install_with(binary: &Path, start: &str) -> Result<(), String> {
-    let out = crate::process::command(binary).args(["install", "--start", start]).stdin(Stdio::null()).output().map_err(|e| format!("{}: {e}", binary.display()))?;
+/// Removes the extension: `<binary> uninstall`, which takes down its service, its skill and its binary and leaves its
+/// data, so installing it again finds them. Shepherd's own `serve` stops first (Windows can't remove a running exe).
+/// Blocking.
+pub fn uninstall(ext: &Extension) -> Result<(), String> {
+    let mut runs = RUNS.lock().unwrap();
+    if let Some(mut run) = runs.remove(&ext.name) {
+        stop(&mut run);
+    }
+    run(&ext.binary, &["uninstall"])
+}
+
+/// `<binary> <args>`, or what it said when it failed.
+fn run(binary: &Path, args: &[&str]) -> Result<(), String> {
+    let out = crate::process::command(binary).args(args).stdin(Stdio::null()).output().map_err(|e| format!("{}: {e}", binary.display()))?;
     if out.status.success() {
         return Ok(());
     }
     let said = [&out.stderr, &out.stdout].map(|b| String::from_utf8_lossy(b).trim().to_string());
-    Err(said.into_iter().find(|s| !s.is_empty()).unwrap_or_else(|| format!("install exited with {}", out.status)))
+    Err(said.into_iter().find(|s| !s.is_empty()).unwrap_or_else(|| format!("{} exited with {}", args.join(" "), out.status)))
 }
 
 /// A GitHub release's build of an extension for this machine.
@@ -345,7 +356,7 @@ pub fn install(release: &Release) -> Result<(), String> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
     }
-    install_with(&path, "shepherd")
+    run(&path, &["install", "--start", "shepherd"])
 }
 
 /// A color as CSS: `#rrggbb` when opaque.
@@ -477,14 +488,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_serve_restarts_when_its_binary_changes_and_after_it_exits() {
+    fn a_serve_restarts_when_its_binary_changes_and_after_it_exits_and_stops_when_removed() {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("sleepy");
         std::fs::create_dir(&dir).unwrap();
         std::fs::write(dir.join("state.json"), r#"{"port":1,"token":"t","start":"shepherd"}"#).unwrap();
         let binary = dir.join("sleepy");
-        std::fs::write(&binary, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        // paddock's `uninstall` takes the binary away and leaves the folder
+        std::fs::write(&binary, "#!/bin/sh\n[ \"$1\" = uninstall ] && exec rm \"$0\"\nexec sleep 30\n").unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         let list = scan(root.path());
         let pid = || RUNS.lock().unwrap().get("sleepy").and_then(|r| r.child.as_ref().map(Child::id));
@@ -506,9 +518,13 @@ mod tests {
         RUNS.lock().unwrap().get_mut("sleepy").unwrap().retry_at = Instant::now();
         supervise(&list);
         assert!(pid().is_some_and(|p| p != second), "started again");
-        // switched to login, or gone: stopped
-        supervise(&[]);
+        // removed: its serve stopped first, and it is no longer listed
+        let third = pid().unwrap();
+        uninstall(&list[0]).unwrap();
         assert!(RUNS.lock().unwrap().is_empty());
+        assert!(!std::process::Command::new("kill").args(["-0", &third.to_string()]).status().unwrap().success(), "stopped");
+        assert!(scan(root.path()).is_empty());
+        assert!(dir.join("state.json").exists(), "its data stays");
     }
 
     #[test]
