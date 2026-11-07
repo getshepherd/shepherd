@@ -770,13 +770,13 @@ impl Shell {
         }
     }
 
-    /// Settings on its Web pages page, opened if it is not up: a page's menu's way there.
+    /// Settings on its Extensions page, which holds the pages too, opened if it is not up: a page's menu's way there.
     pub(super) fn open_web_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.is_none() {
             self.toggle_settings_here(window, cx);
         }
         if let Some((view, _)) = &self.settings {
-            view.update(cx, |v, cx| v.show_web_pages(cx));
+            view.update(cx, |v, cx| v.show_extensions(cx));
         }
     }
 
@@ -1106,6 +1106,7 @@ impl Shell {
     /// herdr paints the terminals' default colors itself: it is told the theme's over the popup watch, which then
     /// is the client in front again (back from herdr's TUI on another machine, say).
     fn push_host_theme(&self, cx: &App) {
+        self.restyle_extension_pages(cx);
         if let Some((surface, _)) = &self.popup_surface {
             surface.theme(floating::host_theme(Theme::of(cx)));
         }

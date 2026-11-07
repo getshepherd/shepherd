@@ -1,4 +1,5 @@
-//! Settings → Web pages: an editable row per page, saved on Enter or when a field is left.
+//! Settings → Extensions' pages added by hand, under the extensions: an editable row per page, saved on Enter or when a
+//! field is left. Their settings keep the name they had (`web_entries`, `web_links_*`), so settings.json still reads.
 use super::*;
 use crate::backend::Kind;
 
@@ -64,7 +65,7 @@ impl SettingsView {
         }
     }
 
-    /// Settings → Web pages, Zeron's way: each page a block of labelled fields on a two-column grid
+    /// The pages added by hand, Zeron's way: each page a block of labelled fields on a two-column grid
     /// (name and URL, where it is listed and where it opens) with a red bin to remove it, "Add page" by the section's
     /// label, and the switch for links to other sites.
     pub(super) fn web_pages(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {

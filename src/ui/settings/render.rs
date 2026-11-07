@@ -392,12 +392,13 @@ impl Render for SettingsView {
                     )
                     .children(agents)
             }
-            Section::WebPages => div()
+            Section::Extensions => div()
                 .child(page_header(
                     &theme,
-                    "Web pages",
+                    "Extensions",
                     "Local tools, listed in the sidebar above the workspaces and shown in place of the tabs and panes.",
                 ))
+                .child(self.extensions(&theme, cx))
                 .child(self.web_pages(&theme, cx)),
             Section::Worktrees => self.worktrees_page(&theme, cx),
             Section::Backend => div()
