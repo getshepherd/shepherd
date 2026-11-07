@@ -9,7 +9,7 @@ use crate::files::*;
 use crate::right_panel::Surface;
 use crate::ui::surface_chrome::toolbar;
 use gpui::{AnyElement, ListAlignment, ListSizingBehavior, ListState, Task, list};
-use std::{cell::RefCell, sync::Arc};
+use std::sync::Arc;
 
 const TREE_ROW_HEIGHT: f32 = 28.0;
 const TREE_INDENT: f32 = 16.0;
@@ -935,8 +935,6 @@ pub(super) struct FilePreview {
     /// The Markdown drawn, from the editor's text when the preview was last asked for.
     markdown: Option<Arc<Vec<crate::ui::review::Block>>>,
     markdown_scroll: gpui::ScrollHandle,
-    /// The editor's rubber band at its ends.
-    elastic: Rc<RefCell<super::file_editor::Elastic>>,
     show_source: bool,
     /// A first close over unsaved changes only warns; the next one discards them.
     pub(super) close_armed: bool,
@@ -963,7 +961,6 @@ impl FilePreview {
             watch_task: None,
             markdown: None,
             markdown_scroll: gpui::ScrollHandle::new(),
-            elastic: Rc::default(),
             show_source: false,
             close_armed: false,
             key,
@@ -1303,11 +1300,7 @@ impl Render for FilePreview {
                         .font_family(theme.font_terminal.clone())
                         .text_size(px(theme.terminal_font_size))
                         .line_height(px((theme.terminal_font_size * theme.terminal_line_height).round()))
-                        .child({
-                            let shift = px(self.elastic.borrow().shift());
-                            div().absolute().left_0().right_0().top(shift).bottom(-shift).child(gpui_base::input::Editor::new(&editor))
-                        })
-                        .child(super::file_editor::terminal_wheel(self.elastic.clone(), editor.clone(), cx.entity_id()))
+                        .child(gpui_base::input::Editor::new(&editor))
                 });
                 div()
                     .flex_1()
