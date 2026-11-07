@@ -8,6 +8,7 @@ use crate::settings::SidebarStyle;
 pub(super) enum ViewSubmenu {
     Sidebar,
     Show,
+    Backend,
 }
 
 /// How long the pointer rests on another `…` row before an open submenu gives way to it: the way from a row to its
@@ -99,6 +100,7 @@ impl Shell {
             let at = gpui::point(px(sidebar_w - 8. - 24.), px(TRAFFIC_LIGHTS_CENTER + 12. + 4.));
             let settings = &SettingsGlobal::of(cx).settings;
             let (show, compact, style, all_worktrees) = (settings.workspace_show, settings.compact_workspaces, settings.sidebar_style, settings.all_worktrees);
+            let backend = self.backend.kind();
             let parts: [(&'static str, &'static str, &'static str, fn(&mut crate::settings::WorkspaceShow) -> &mut bool); 5] = [
                 ("show-icon", "icons/folder.svg", "Project icon", |s| &mut s.icon),
                 ("show-branch", "icons/git-branch.svg", "Branch", |s| &mut s.branch),
@@ -143,6 +145,21 @@ impl Shell {
                                     })
                                 }))
                             }),
+                            cx,
+                        ))
+                        // Settings' Backend, a click away: the installed ones, every window moving at once
+                        .child(view_submenu(
+                            self,
+                            theme,
+                            ViewSubmenu::Backend,
+                            ("view-backend", "backend-submenu", "Backend"),
+                            crate::backend::Kind::ALL.into_iter().zip(["backend-herdr", "backend-hc", "backend-rex", "backend-tmux"]).filter(|(k, _)| k.installed() || *k == backend).map(|(kind, id)| {
+                                menu_choice(theme, id, kind.icon(), kind.name(), kind == backend).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    if let Some(m) = this.view_menu.as_mut() { m.close() }
+                                    crate::shell::set_backend(kind, cx);
+                                    cx.notify();
+                                }))
+                            }).collect::<Vec<_>>(),
                             cx,
                         ))
                         .child(div().mx(px(-4.)).my(px(4.)).h(px(1.)).bg(theme.border))
@@ -711,7 +728,7 @@ impl Shell {
             modal("worktree-dialog", dialog, window, card)
         }))
         .children(self.session_dialog.as_ref().map(|dialog| {
-            let remote = dialog.value.remote;
+            let (remote, rex) = (dialog.value.remote, dialog.value.rex);
             let field = |input: &Entity<InputState>| {
                 div()
                     .mt(px(8.))
@@ -726,7 +743,7 @@ impl Shell {
                     .text_size(px(14.))
                     .child(div().flex_1().child(Input::new(input)))
             };
-            let card = dialog_card(theme, "session-dialog", "New session")
+            let card = dialog_card(theme, "session-dialog", if rex { "New host" } else { "New session" })
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| this.finish_session_dialog(false, cx)))
                 .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _, cx| {
                     if e.keystroke.key == "escape" {
@@ -734,10 +751,12 @@ impl Shell {
                         this.finish_session_dialog(false, cx);
                     }
                 }))
-                .child(div().mt(px(4.)).text_color(theme.text_muted).child(if remote { "Name, or empty for the host's default session" } else { "Name" }))
+                .child(div().mt(px(4.)).text_color(theme.text_muted).child(if remote && !rex { "Name, or empty for the host's default session" } else { "Name" }))
                 .child(field(&dialog.value.name))
+                // a Rex host's address, always asked
+                .when(rex, |card| card.child(div().mt(px(12.)).text_color(theme.text_muted).child("Address")).child(field(&dialog.value.host)))
                 // the host field slides open under the name, and the card grows with it
-                .child({
+                .when(!rex, |card| card.child({
                     // its margin and box: the height it springs to
                     let full = 8. + SESSION_FIELD_H;
                     let host = div().flex_none().overflow_hidden().child(field(&dialog.value.host));
@@ -755,9 +774,9 @@ impl Shell {
                             )
                             .into_any_element(),
                     }
-                })
+                }))
                 // on: the session runs on an SSH host, saved as a herdr machine
-                .child(
+                .when(!rex, |card| card.child(
                     row(theme, false, "session-remote")
                         .mt(px(12.))
                         .mx(px(-8.))
@@ -766,7 +785,7 @@ impl Shell {
                         .child(div().flex_1().child("Remote"))
                         .child(crate::ui::switch(theme, remote, "session-remote"))
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.toggle_session_remote(window, cx))),
-                )
+                ))
                 .child(
                     div()
                         .mt(px(16.))
