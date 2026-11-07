@@ -61,6 +61,7 @@ pub enum LanguageId {
     Zig,
     GraphQl,
     Dart,
+    ObjC,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -389,7 +390,7 @@ fn injected_languages(parent: LanguageId) -> Vec<LanguageId> {
         Markdown => vec![
             Rust, JavaScript, Jsx, TypeScript, Tsx, Python, Go, Json, Jsonc, Bash, Toml, Html, Css,
             Yaml, C, Cpp, CSharp, Java, Kotlin, Swift, Ruby, Php, Sql, Lua, Dockerfile, Nix, Make,
-            Vue, Svelte, Scss, Zig, GraphQl, Dart,
+            Vue, Svelte, Scss, Zig, GraphQl, Dart, ObjC,
         ],
         Dockerfile => vec![Bash, Json, Yaml, Toml],
         _ => Vec::new(),
@@ -422,7 +423,7 @@ fn cached_configuration(
     registry!(
         Rust, JavaScript, Jsx, TypeScript, Tsx, Python, Go, Json, Jsonc, Bash, Toml, Markdown,
         Html, Css, Yaml, C, Cpp, CSharp, Java, Kotlin, Swift, Ruby, Php, Sql, Lua, Dockerfile, Nix,
-        Make, Vue, Svelte, Scss, Zig, GraphQl, Dart,
+        Make, Vue, Svelte, Scss, Zig, GraphQl, Dart, ObjC,
     )
 }
 
@@ -767,6 +768,18 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             tree_sitter_dart::LOCALS_QUERY,
         ),
+        // tree-sitter-objc's highlights inherit C's (`; inherits: c`): C's first, so Objective-C's, later, win where both match.
+        ObjC => make_configuration(
+            tree_sitter_objc::LANGUAGE.into(),
+            "objc",
+            &format!(
+                "{}\n{}",
+                tree_sitter_c::HIGHLIGHT_QUERY,
+                include_str!("../queries/objc/highlights.scm")
+            ),
+            "",
+            "",
+        ),
     }
 }
 
@@ -892,6 +905,8 @@ pub fn language_for_alias(alias: &str) -> Option<LanguageId> {
         "zig" | "zon" => LanguageId::Zig,
         "graphql" | "gql" | "graphqls" => LanguageId::GraphQl,
         "dart" => LanguageId::Dart,
+        // .mm is Objective-C++: the C++ in it is read as C
+        "objc" | "objective-c" | "objectivec" | "m" | "mm" => LanguageId::ObjC,
         _ => return None,
     })
 }
@@ -1290,6 +1305,11 @@ fn build(value: usize) -> Widget {
                 "void main() { final x = 1; }",
             ),
             (
+                LanguageId::ObjC,
+                "App.m",
+                "@implementation App\n- (void)run:(int)n { [self stop]; }\n@end",
+            ),
+            (
                 LanguageId::Dockerfile,
                 "Dockerfile",
                 "FROM alpine\nRUN echo hello",
@@ -1323,6 +1343,7 @@ fn build(value: usize) -> Widget {
             LanguageId::Tsx,
             LanguageId::Kotlin,
             LanguageId::Dockerfile,
+            LanguageId::ObjC,
         ] {
             let configuration = configuration(language)
                 .unwrap_or_else(|error| panic!("{language:?} query failed to load: {error}"));
