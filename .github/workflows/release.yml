@@ -215,9 +215,13 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Release a new version
+        env:
+          SHEPHERD_UPDATE_KEY: ${{ secrets.SHEPHERD_UPDATE_KEY }}
         run: |
           # a Windows zip built by now is release-windows' to add
           rm -f dist/*-windows-*
+          # the tar.gz is what a Linux install outside /usr/bin updates itself from (src/update.rs)
+          scripts/sign-update.sh dist/*-linux-*.tar.gz
           tag="v$(make -s version)"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "$tag is already released"
@@ -246,9 +250,13 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Add the Windows zips
+        env:
+          SHEPHERD_UPDATE_KEY: ${{ secrets.SHEPHERD_UPDATE_KEY }}
         run: |
           # Windows aarch64 may be missing (it is cross-built and may fail); the x86_64 zip may not
           if ls dist/*.zip >/dev/null 2>&1; then
-            gh release upload "v$(make -s version)" dist/*.zip --clobber
+            # each zip with its signature, which a Windows install checks before it updates itself (src/update.rs)
+            scripts/sign-update.sh dist/*.zip
+            gh release upload "v$(make -s version)" dist/*.zip dist/*.zip.sig --clobber
           fi
           ls dist/*-windows-x86_64.zip >/dev/null

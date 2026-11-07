@@ -32,6 +32,8 @@ bincode = { version = "2", features = ["serde"] }
 tiny-skia = "0.11"
 tokio = { version = "1", features = ["full"] }
 ureq = "3.4.2"
+# checks a release archive's Ed25519 signature off macOS (src/update.rs); already built for rustls
+ring = "0.17"
 # a Rex host's HTTPS (src/rex/tunnel.rs), on the rustls and roots ureq already brings
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 webpki-roots = "1"
