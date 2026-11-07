@@ -396,7 +396,7 @@ impl Render for SettingsView {
                 .child(page_header(
                     &theme,
                     "Extensions",
-                    "Local tools, listed in the sidebar above the workspaces and shown in place of the tabs and panes.",
+                    "Tools with a page in the sidebar, above the workspaces, and a CLI for agents; and web pages of your own.",
                 ))
                 .child(self.extensions(&theme, cx))
                 .child(self.web_pages(&theme, cx)),

@@ -138,7 +138,7 @@ impl SettingsView {
                     .pl(px(8.))
                     .flex()
                     .items_center()
-                    .child(div().flex_1().text_color(muted).child("Pages"))
+                    .child(div().flex_1().text_color(muted).child("Web pages"))
                     .child(
                         action(theme, "web-add", "Add page")
                             .gap(px(6.))
@@ -151,7 +151,7 @@ impl SettingsView {
                     el.child(card_row(theme, true).child(row_text(
                         theme,
                         "No web pages yet",
-                        "Add one with its URL: a dev server, a dashboard, a tool on a machine.",
+                        "Any URL as a page of its own: a dev server, a dashboard, a tool on a machine.",
                     )))
                 }),
             )
