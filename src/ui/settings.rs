@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 mod backends;
+mod extensions;
 mod render;
 mod select;
 mod web;
@@ -44,7 +45,7 @@ enum Section {
     Appearance,
     Notifications,
     Usage,
-    WebPages,
+    Extensions,
     Backend,
     Worktrees,
     Shortcuts,
@@ -58,7 +59,7 @@ impl Section {
         Section::Appearance,
         Section::Notifications,
         Section::Usage,
-        Section::WebPages,
+        Section::Extensions,
         Section::Backend,
         Section::Worktrees,
         Section::Shortcuts,
@@ -72,7 +73,7 @@ impl Section {
             Section::Appearance => "Appearance",
             Section::Notifications => "Notifications",
             Section::Usage => "Usage",
-            Section::WebPages => "Web pages",
+            Section::Extensions => "Extensions",
             Section::Backend => "Backend",
             Section::Worktrees => "Worktrees",
             Section::Shortcuts => "Shortcuts",
@@ -87,7 +88,7 @@ impl Section {
             Section::Appearance => "icons/tuning.svg",
             Section::Notifications => "icons/bell.svg",
             Section::Usage => "icons/clock-circle.svg",
-            Section::WebPages => "icons/solar/global.svg",
+            Section::Extensions => "icons/solar/global.svg",
             Section::Backend => "icons/solar/server-2.svg",
             Section::Worktrees => "icons/git-branch.svg",
             Section::Shortcuts => "icons/keyboard.svg",
@@ -161,6 +162,13 @@ pub struct SettingsView {
     backend_note: Option<String>,
     /// The action whose chord the next keystroke becomes.
     recording: Option<&'static str>,
+    /// Install from GitHub's repo field, where that install is, and what it came to.
+    ext_repo: Entity<InputState>,
+    install: extensions::Install,
+    install_note: Option<String>,
+    /// The extension whose start is being switched, and why the last switch failed.
+    ext_busy: Option<String>,
+    ext_note: Option<String>,
     /// The web pages' name and URL fields, in the settings' order; made as entries come, dropped as they go.
     web_fields: Vec<WebFields>,
     /// The places a web page can be listed in, as (key, name), once herdr has listed them.
@@ -254,8 +262,8 @@ impl SettingsView {
         }
     }
 
-    pub fn show_web_pages(&mut self, cx: &mut Context<Self>) {
-        self.section = Section::WebPages;
+    pub fn show_extensions(&mut self, cx: &mut Context<Self>) {
+        self.section = Section::Extensions;
         cx.notify();
     }
 
@@ -289,7 +297,13 @@ impl SettingsView {
             .collect();
 
         let select_search = field(None, "Search", window, cx);
-        let mut subscriptions = vec![cx.subscribe(&select_search, |v: &mut Self, search, event: &InputEvent, cx| {
+        let ext_repo = field(None, "owner/repo", window, cx);
+        let mut subscriptions = vec![cx.subscribe(&ext_repo, |v: &mut Self, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) && matches!(v.install, extensions::Install::Idle) {
+                v.find_release(cx);
+            }
+        })];
+        subscriptions.push(cx.subscribe(&select_search, |v: &mut Self, search, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 // a query highlights its first match; the emptied field of an opening select keeps the current option
                 if !search.read(cx).value().trim().is_empty() {
@@ -297,7 +311,7 @@ impl SettingsView {
                 }
                 cx.notify()
             }
-        })];
+        }));
         for (input, apply) in [
             (&herdr_bin, (|s: &mut Settings, v: String| s.herdr_bin = (!v.is_empty()).then_some(v)) as fn(&mut Settings, String)),
             (&herdr_socket, |s: &mut Settings, v: String| s.herdr_socket = (!v.is_empty()).then_some(v)),
@@ -410,6 +424,11 @@ impl SettingsView {
             job: None,
             backend_note: None,
             recording: None,
+            ext_repo,
+            install: Default::default(),
+            install_note: None,
+            ext_busy: None,
+            ext_note: None,
             web_fields: Vec::new(),
             places: None,
             backend: settings.backend,
@@ -426,6 +445,12 @@ impl SettingsView {
             focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
+        // SHEPHERD_SETTINGS=<section>, its label in any case (`extensions`), opens Settings on it, for screenshots.
+        if let Ok(name) = std::env::var("SHEPHERD_SETTINGS")
+            && let Some(section) = Section::ALL.into_iter().find(|s| s.label().eq_ignore_ascii_case(&name))
+        {
+            view.section = section;
+        }
         // SHEPHERD_SELECT=<select id>[:query] opens that list at launch, filtered, for screenshots.
         if let Ok(spec) = std::env::var("SHEPHERD_SELECT") {
             let (id, query) = spec.split_once(':').unwrap_or((spec.as_str(), ""));

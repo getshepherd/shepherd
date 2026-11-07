@@ -14,7 +14,7 @@ const DIM: f32 = 0.1;
 /// An agent's spinner rests brighter, so its shape still reads as a glyph between pulses.
 const AGENT_DIM: f32 = 0.45;
 /// Zeron's sunrise gradient, a tint per row top to bottom.
-const ROW_TINTS: [u32; 3] = [0xB6D3EF, 0xEDB185, 0xF888A0];
+pub(crate) const ROW_TINTS: [u32; 3] = [0xB6D3EF, 0xEDB185, 0xF888A0];
 /// A wait shorter than this shows no loader, so a quick local connect doesn't flash one.
 const GRACE: Duration = Duration::from_millis(300);
 

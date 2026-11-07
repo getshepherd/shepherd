@@ -10,6 +10,7 @@ pub mod bindings;
 pub mod changes;
 pub mod commands;
 pub mod device;
+pub mod extensions;
 pub mod hc;
 pub mod herdr;
 pub mod mock;
