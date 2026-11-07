@@ -5,6 +5,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+pub mod agent;
 mod android;
 #[cfg(target_os = "macos")]
 mod duo;
@@ -13,6 +14,8 @@ mod ios;
 pub mod models;
 #[cfg(target_os = "macos")]
 mod scrcpy;
+#[cfg(target_os = "macos")]
+mod simdriver_cli;
 #[cfg(target_os = "macos")]
 pub mod surface;
 pub mod tools;
@@ -468,6 +471,7 @@ impl Session {
             Session::Android(s) => s.scroll(phase, x, y, dx, dy, wheel),
             // ponytail: a USB phone doesn't scroll yet; the emulator's drag (android::Session::scroll) would do over
             // scrcpy's touches too
+            #[cfg(target_os = "macos")]
             Session::Phone(_) => {}
         }
     }

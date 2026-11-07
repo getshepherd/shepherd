@@ -30,6 +30,8 @@ pub struct Settings {
     pub herdr_socket: Option<String>,
     /// The saved herdr machine (`herdr machine`) shown, by id; its relay's socket is `herdr_socket`.
     pub herdr_machine: Option<String>,
+    /// The Rex host (`rex hosts`) shown, as it was listed; `None` is the server on this machine.
+    pub rex_host: Option<crate::rex::Host>,
     /// The names and icons given to herdr sessions and machines in Shepherd, by the place's key (a session's socket,
     /// `machine:<id>`).
     pub place_looks: BTreeMap<String, PlaceLook>,
@@ -121,6 +123,8 @@ pub struct Settings {
     pub web_links_inside: bool,
     /// The Device tab's setup was gone through: it lists the devices straight away.
     pub devices_set_up: bool,
+    /// Agents in the panes may drive the device open in their workspace, through `shepherd-device` on the PATH.
+    pub devices_agent_access: bool,
     /// Where the window was last; `None` opens it centered.
     pub window: Option<WindowFrame>,
 }
@@ -378,6 +382,7 @@ impl Default for Settings {
             hc_sync: true,
             herdr_socket: None,
             herdr_machine: None,
+            rex_host: None,
             place_looks: BTreeMap::new(),
             place_order: Vec::new(),
             editor: None,
@@ -421,6 +426,7 @@ impl Default for Settings {
             web_links_outside: false,
             web_links_inside: false,
             devices_set_up: false,
+            devices_agent_access: false,
             window: None,
         }
     }

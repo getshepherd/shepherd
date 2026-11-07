@@ -6632,7 +6632,7 @@ dependencies = [
 
 [[package]]
 name = "shepherd"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6666,14 +6666,17 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "simdriver",
+ "simdriver-agent",
  "tempfile",
  "tiny-skia",
  "tokio",
+ "tokio-rustls",
  "toml_edit 0.25.17+spec-1.1.0",
  "tonic",
  "tonic-prost",
  "unicode-width",
  "ureq",
+ "webpki-roots",
  "wry",
  "zeron-markdown",
  "zeron-syntax",
@@ -6724,6 +6727,18 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "simdriver-agent"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4edd69b9aceaf4f9d64ab63c18818781f6dbad6ea92b1856f8b1f82419e26896"
+dependencies = [
+ "png 0.18.1",
+ "serde",
+ "serde_json",
+ "simdriver",
 ]
 
 [[package]]
@@ -7458,6 +7473,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.7",
+]
+
+[[package]]
+name = "tokio-rustls"
+version = "0.26.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9cc2678c2cdd569ef8215e2afd7954ada2ae20b4fdd2c5fe6139a3b02d105db"
+dependencies = [
+ "rustls",
+ "tokio",
 ]
 
 [[package]]

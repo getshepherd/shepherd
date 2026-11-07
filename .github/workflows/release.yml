@@ -17,6 +17,11 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+# Actions keeps 10 GB of cache a repository, oldest out first, and the jobs' rust-caches outgrew it, so each run pushed
+# out the others' and macOS built cold (~40 min). Without debug info a dev and test target is a fraction of the size.
+env:
+  CARGO_PROFILE_DEV_DEBUG: 0
+
 jobs:
   # Cargo.toml's version has no release yet: only then are the apps built and packed, which is most of a run's time
   version:
@@ -116,10 +121,12 @@ jobs:
       - run: make lint
       - run: make test
       # one build, packed as a tar.gz, a .deb and an .rpm; it tells of new releases (src/update.rs)
+      # built outside target/, so the cache keeps only lint's and test's build: a release's is rare and not worth its GBs
       - run: scripts/linux-dist.sh
         if: needs.version.outputs.new == 'true'
         env:
           SHEPHERD_UPDATE_CHECK: 1
+          CARGO_TARGET_DIR: ${{ runner.temp }}/dist-target
       - uses: actions/upload-artifact@v4
         if: needs.version.outputs.new == 'true'
         with:

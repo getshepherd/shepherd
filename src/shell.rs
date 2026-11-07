@@ -29,6 +29,7 @@ mod divider;
 mod file_editor;
 mod files;
 mod floating;
+mod layer;
 mod merge;
 mod motion;
 mod pane_drag;
@@ -110,6 +111,13 @@ pub struct Shell {
     divider: Option<DividerDrag>,
     /// A released divider's ratio, shown until herdr's snapshot catches up (no jump back to the old layout).
     settling: Option<(Vec<bool>, f32)>,
+    /// A floating layer being moved or resized, and one let go, shown until the backend's snapshot catches up.
+    layer_drag: Option<layer::LayerDrag>,
+    layer_settling: Option<(String, crate::model::Frac)>,
+    /// Floating layers turning into their buttons at the tab's foot, or back.
+    morphs: Vec<layer::Morph>,
+    /// Where each minimized layer's button was drawn, by the pane it restores: where a morph ends or starts.
+    pill_bounds: Rc<std::cell::RefCell<HashMap<String, Bounds<Pixels>>>>,
     /// The tab or workspace label being edited in place.
     renaming: Option<Rename>,
     folded: std::collections::HashSet<String>,
@@ -335,6 +343,8 @@ pub struct Shell {
     session_delete: Option<crate::ui::Popup<sessions::Place>>,
     /// The saved machine shown, by its label; `None` for a session on this Mac.
     machine_label: Option<String>,
+    /// On Rex, the host shown; `None` for the server on this machine.
+    rex_host: Option<crate::rex::Host>,
 }
 
 /// New worktree: the repo's workspace and the branch name being typed.
@@ -515,13 +525,20 @@ impl Shell {
                     fitted: None,
                     backend: {
                         let settings = &SettingsGlobal::of(cx).settings;
-                        Backend::of(settings.backend, settings.herdr_socket.clone())
+                        match settings.backend {
+                            crate::backend::Kind::Rex => Backend::rex(settings.rex_host.as_ref()),
+                            kind => Backend::of(kind, settings.herdr_socket.clone()),
+                        }
                     },
                     rt: rt.clone(),
                     plugin_actions: Vec::new(),
                     grid_bounds: Rc::new(Cell::new(None)),
                     divider: None,
                     settling: None,
+                    layer_drag: None,
+                    layer_settling: None,
+                    morphs: Vec::new(),
+                    pill_bounds: Rc::default(),
                     renaming: None,
                     folded: SettingsGlobal::of(cx).settings.folded.iter().cloned().collect(),
                     agents_folded: SettingsGlobal::of(cx).settings.agents_folded.iter().cloned().collect(),
@@ -638,6 +655,7 @@ impl Shell {
                     session_dialog: None,
                     session_delete: None,
                     machine_label: None,
+                    rex_host: SettingsGlobal::of(cx).settings.rex_host.clone(),
                 };
                 shell.resume_machine(cx);
                 shell.connect(cx);
@@ -1374,7 +1392,7 @@ mod tests {
 
     fn shown(ids: &[&str]) -> Vec<PaneFrame> {
         let frame = Frac { x: 0.0, y: 0.0, w: 1.0, h: 1.0 };
-        ids.iter().map(|id| PaneFrame { pane_id: id.to_string(), frame, focused: false }).collect()
+        ids.iter().map(|id| PaneFrame { pane_id: id.to_string(), frame, focused: false, layer: None }).collect()
     }
 
     /// Surfaces stand in as "has its process exited?".

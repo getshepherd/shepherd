@@ -1,6 +1,6 @@
 [package]
 name = "shepherd"
-version = "1.7.0"
+version = "1.7.1"
 edition = "2024"
 publish = false
 description = "A native window for herdr: workspaces, tabs, panes and every coding agent at a glance"
@@ -32,6 +32,9 @@ bincode = { version = "2", features = ["serde"] }
 tiny-skia = "0.11"
 tokio = { version = "1", features = ["full"] }
 ureq = "3.4.2"
+# a Rex host's HTTPS (src/rex/tunnel.rs), on the rustls and roots ureq already brings
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1"
 # URLs of web integrations; the same crate ureq and wry use
 http = "1"
 # web integrations' pages, in the system web view
@@ -58,6 +61,8 @@ objc2-user-notifications = { version = "0.3", default-features = false, features
 block2 = "0.6"
 # iOS Simulators' screens and input (src/device/ios.rs); its helpers build against Xcode's CoreSimulator
 simdriver = "0.2.4"
+# `shepherd device`: simdriver's agent layer (element refs, validated taps, flows) for agents (src/device/agent.rs)
+simdriver-agent = "0.2.4"
 # a device's frames as IOSurfaces for GPUI's paint_surface (src/device/surface.rs); gpui's own versions
 core-video = "0.5.2"
 core-foundation = "0.10"

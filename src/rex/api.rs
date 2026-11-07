@@ -1,11 +1,12 @@
 //! [`Rex`] as a backend: a session is a workspace, a window a tab and a block a pane. Rex's ids name one thing, the
 //! window's commands take only a pane or a tab: `session/block` and `session/window`.
 use super::TERMINAL;
+use super::Endpoint;
 use super::conn::Control;
 use crate::agents::{Report, plain_title};
-use crate::backend::{Attached, Change, Kind, Made, Mode, Mux, Reply};
+use crate::backend::{Attached, Change, Float, Kind, Made, Mode, Mux, Reply};
 use crate::commands::Command;
-use crate::model::{AREA, AgentStatus, Layout, LayoutPane, LayoutSplit, Pane, Rect, Snapshot, Tab, Workspace, Worktree};
+use crate::model::{AREA, AgentStatus, Frac, Layout, LayoutPane, LayoutSplit, Minimized, Pane, Rect, Snapshot, Tab, Workspace, Worktree};
 use crate::worktree::Checkouts;
 use anyhow::{anyhow, bail};
 use serde_json::{Value, json};
@@ -18,6 +19,8 @@ const SHELL: &str = "com.superlogical.terminal.shell";
 /// The connection to the server, opened when first asked. Dropped, the server runs on.
 #[derive(Default)]
 pub struct Rex {
+    /// A host's ways to reach it, tried in turn; none for the server on this machine.
+    servers: Vec<Endpoint>,
     control: Arc<Mutex<Option<Arc<Control>>>>,
     shared: Arc<Shared>,
 }
@@ -87,21 +90,24 @@ struct Block {
     stale: bool,
 }
 
-fn connect(held: &Mutex<Option<Arc<Control>>>, shared: &Arc<Shared>) -> anyhow::Result<Arc<Control>> {
+fn connect(held: &Mutex<Option<Arc<Control>>>, shared: &Arc<Shared>, servers: &[Endpoint]) -> anyhow::Result<Arc<Control>> {
     let mut held = held.lock().unwrap();
     if let Some(core) = held.as_ref().filter(|c| !c.lost()) {
         return Ok(core.clone());
     }
+    let here = servers.is_empty();
+    let servers = if here { Endpoint::local()? } else { servers.to_vec() };
     let open = || {
         let shared = shared.clone();
-        Control::open(move |event| {
+        Control::open(&servers, move |event| {
             if heard(event, &mut shared.state.lock().unwrap()) {
                 shared.say();
             }
         })
     };
     let core = open().or_else(|e| {
-        if !crate::herdr::no_server(&e) {
+        // a host's server is started on the host, not from here
+        if !here || !servers.iter().all(Endpoint::is_local) || !crate::herdr::no_server(&e) {
             return Err(e);
         }
         super::start_server()?;
@@ -114,9 +120,14 @@ fn connect(held: &Mutex<Option<Arc<Control>>>, shared: &Arc<Shared>) -> anyhow::
 }
 
 impl Rex {
+    /// The server at `servers`, the ways to reach a host in the order to try them.
+    pub fn at(servers: Vec<Endpoint>) -> Self {
+        Self { servers, control: Arc::default(), shared: Arc::default() }
+    }
+
     async fn connected(&self) -> anyhow::Result<Arc<Control>> {
-        let (held, shared) = (self.control.clone(), self.shared.clone());
-        tokio::task::spawn_blocking(move || connect(&held, &shared)).await?
+        let (held, shared, servers) = (self.control.clone(), self.shared.clone(), self.servers.clone());
+        tokio::task::spawn_blocking(move || connect(&held, &shared, &servers)).await?
     }
 
     /// A new session on one shell in `cwd`.
@@ -220,6 +231,20 @@ impl Mux for Rex {
                 }
                 Command::ClosePane { pane_id } => {
                     let (session, block) = ids(&pane_id)?;
+                    // The split's last pane, closed under floating ones, would leave the tab nothing to dock them
+                    // into, and Rex has no way to start a split again there: the front floating pane takes its place.
+                    // ponytail: a program in it that exits on its own still leaves them floating; Rex would have to
+                    // place a block in an empty split for that.
+                    let view = view(core, session).await?;
+                    let windows = view["windows"].as_array().map(Vec::as_slice).unwrap_or_default();
+                    let window = windows.iter().find(|w| frames(tree(w)).0.iter().any(|(b, _)| b == block));
+                    if let Some(window) = window.filter(|w| frames(tree(w)).0.len() == 1) {
+                        let floating: Vec<_> = layers(window).iter().filter(|l| l["kind"] == "floating").collect();
+                        let front = floating.iter().rev().find(|l| l["state"] != "minimized").or(floating.last());
+                        if let Some((other, _)) = front.and_then(|l| frames(&l["layout"]).0.into_iter().next()) {
+                            core.call("session.swap_blocks", json!({"session_id": session, "block_id": block, "other_block_id": other})).await?;
+                        }
+                    }
                     core.call("block.close", json!({"session_id": session, "block_id": block})).await?;
                     Made::default()
                 }
@@ -295,6 +320,46 @@ impl Mux for Rex {
         })
     }
 
+    fn float(&self, pane: String, change: Float) -> Reply<'_, ()> {
+        Box::pin(async move {
+            let core = self.connected().await?;
+            let (session, block) = ids(&pane)?;
+            let view = view(&core, session).await?;
+            let windows = view["windows"].as_array().map(Vec::as_slice).unwrap_or_default();
+            let holds = |l: &&Value| l["blocks"].as_array().is_some_and(|b| b.iter().any(|b| b["block_id"] == block));
+            let (window, layer) = windows
+                .iter()
+                .find_map(|w| layers(w).iter().find(holds).map(|l| (w, l)))
+                .ok_or_else(|| anyhow!("no pane {pane}"))?;
+            let layer_id = text_of(&layer["layer_id"]);
+            let floats = layer["kind"] == "floating";
+            let at = |method: &'static str, args: Value| {
+                let mut args = args;
+                args["session_id"] = json!(session);
+                core.call(method, args)
+            };
+            match change {
+                // the split's last pane stays: a tab of layers alone has nothing to dock them back into
+                Float::Out if !floats && frames(tree(window)).0.len() < 2 => bail!("the split's last pane can't float"),
+                Float::Out if !floats => at("session.float_block", json!({"block_id": block, "bounds": OUT})).await?,
+                Float::Dock if floats => {
+                    let tiled = frames(tree(window)).0;
+                    let focused = text_of(&window["focused_block_id"]);
+                    let anchor = tiled.iter().find(|(b, _)| b == focused).or(tiled.first()).map(|(b, _)| b.clone());
+                    // Rex places a block only beside another
+                    let anchor = anchor.ok_or_else(|| anyhow!("the tab has no split to dock into"))?;
+                    at("session.move_block", moved(session, block, &anchor, false)).await?
+                }
+                Float::Raise if floats => at("session.raise_layer", json!({"layer_id": layer_id})).await?,
+                Float::Place(frame) if floats => at("session.resize_layer", json!({"layer_id": layer_id, "bounds": bounds(frame)})).await?,
+                Float::Minimize if floats => at("session.set_layer_state", json!({"layer_id": layer_id, "state": "minimized"})).await?,
+                Float::Restore if floats => at("session.set_layer_state", json!({"layer_id": layer_id, "state": "normal", "focus": true})).await?,
+                _ => return Ok(()),
+            };
+            Ok(())
+        })
+    }
+
     fn cwd(&self, pane: String) -> Reply<'_, Option<String>> {
         Box::pin(async move { Ok(cwd_of(self.connected().await?.as_ref(), &pane).await) })
     }
@@ -310,7 +375,7 @@ impl Mux for Rex {
         Box::pin(async move {
             let process = on_block(self.connected().await?.as_ref(), &pane, "process", json!({})).await?;
             let fg = &process["foreground"];
-            Ok(if fg["pid"] == *shell_pid(&process) { None } else { fg["name"].as_str().map(str::to_string) })
+            Ok(if fg["pid"] == *shell_pid(&process) { None } else { program_name(fg) })
         })
     }
 
@@ -325,7 +390,9 @@ impl Mux for Rex {
     }
 
     fn attach(&self, pane: &str, cols: u16, rows: u16, cell_px: (u32, u32), mode: Mode) -> anyhow::Result<Attached> {
-        let (attached, events) = super::attach(pane, cols, rows, cell_px, mode == Mode::Observe)?;
+        // the stream goes to the address the backend's connection reached, not to each in turn again
+        let server = connect(&self.control, &self.shared, &self.servers)?.server.clone();
+        let (attached, events) = super::attach(&server, pane, cols, rows, cell_px, mode == Mode::Observe)?;
         Ok((Box::new(attached), events))
     }
 
@@ -363,10 +430,47 @@ fn window_of<'a>(view: &'a Value, window: &str) -> Option<&'a Value> {
     view["windows"].as_array()?.iter().find(|w| w["window_id"] == window)
 }
 
-/// The split tree a window shows. Rex's floating layers have no place in Shepherd's panes.
+/// Where a pane floated out of the split sits: centered, at most of the tab.
+const OUT: [f64; 4] = [0.15, 0.1, 0.7, 0.75];
+
+/// `frame` as Rex's bounds, kept inside the window, which Rex insists on.
+fn bounds(frame: Frac) -> [f64; 4] {
+    let (w, h) = (f64::from(frame.w).clamp(0.05, 1.), f64::from(frame.h).clamp(0.05, 1.));
+    [f64::from(frame.x).clamp(0., 1. - w), f64::from(frame.y).clamp(0., 1. - h), w, h]
+}
+
+/// The split tree a window shows.
 fn tree(window: &Value) -> &Value {
-    let layers = window["layers"].as_array().map(Vec::as_slice).unwrap_or_default();
-    layers.iter().find(|l| l["kind"] == "tiled").map_or(&Value::Null, |l| &l["layout"])
+    layers(window).iter().find(|l| l["kind"] == "tiled").map_or(&Value::Null, |l| &l["layout"])
+}
+
+fn layers(window: &Value) -> &[Value] {
+    window["layers"].as_array().map(Vec::as_slice).unwrap_or_default()
+}
+
+/// A window's panes: its split's, then each floating layer's, back to front, with the layer. A minimized layer's
+/// blocks run on but aren't drawn.
+fn laid(window: &Value) -> (Vec<(String, Rect, Option<String>)>, Vec<LayoutSplit>) {
+    let (tiled, splits) = frames(tree(window));
+    let mut panes: Vec<_> = tiled.into_iter().map(|(block, rect)| (block, rect, None)).collect();
+    for layer in layers(window).iter().filter(|l| l["kind"] == "floating" && l["state"] != "minimized") {
+        let id = text_of(&layer["layer_id"]).to_string();
+        panes.extend(frames(&layer["layout"]).0.into_iter().map(|(block, rect)| (block, rect, Some(id.clone()))));
+    }
+    (panes, splits)
+}
+
+/// A window's minimized layers, front first: the first pane of each, named by its title or Rex's label.
+fn minimized(window: &Value, session: &str, state: &State) -> Vec<Minimized> {
+    let layers = layers(window).iter().rev().filter(|l| l["kind"] == "floating" && l["state"] == "minimized");
+    layers
+        .filter_map(|l| {
+            let (block, _) = frames(&l["layout"]).0.into_iter().next()?;
+            let title = state.blocks.get(&block).map(|k| plain_title(&k.title).to_string()).filter(|t| !t.is_empty());
+            let label = title.unwrap_or_else(|| text_of(&l["blocks"][0]["label"]).to_string());
+            Some(Minimized { pane_id: format!("{session}/{block}"), label })
+        })
+        .collect()
 }
 
 /// Where a session's focused pane is now.
@@ -384,6 +488,12 @@ fn text_of(value: &Value) -> &str {
 fn shell_pid(process: &Value) -> &Value {
     let ancestors = process["ancestors"].as_array().map(Vec::as_slice).unwrap_or_default();
     ancestors.iter().rev().find(|p| p["name"] != "login").map_or(&process["foreground"]["pid"], |shell| &shell["pid"])
+}
+
+/// A process's name as it was started: Claude Code's binary is named for its version (`2.1.319`) and run as `claude`.
+fn program_name(process: &Value) -> Option<String> {
+    let argv0 = process["argv0"].as_str().map(|a| a.rsplit('/').next().unwrap_or(a).trim_start_matches('-')).filter(|a| !a.is_empty());
+    argv0.or(process["name"].as_str()).map(str::to_string)
 }
 
 fn tail(text: &str, lines: usize) -> String {
@@ -443,7 +553,7 @@ fn border<'a>(mut node: &'a Value, path: &[bool]) -> Option<(&'a str, &'a str, &
 /// Every block a view shows.
 fn blocks(view: &Value) -> Vec<String> {
     let windows = view["windows"].as_array().map(Vec::as_slice).unwrap_or_default();
-    windows.iter().flat_map(|w| frames(tree(w)).0).map(|(block, _)| block).collect()
+    windows.iter().flat_map(|w| laid(w).0).map(|(block, ..)| block).collect()
 }
 
 /// A tree's panes and splits as the window takes them. A split's id is its path, which [`crate::model::split_path`]
@@ -476,10 +586,10 @@ fn rect(fractions: &Value) -> Rect {
     Rect { x, y, width: grid(at(0) + at(2)) - x, height: grid(at(1) + at(3)) - y }
 }
 
-/// The block a window's keys go to, of those Shepherd shows: a floating one's are the layout's.
-fn focused_block<'a>(window: &'a Value, frames: &'a [(String, Rect)]) -> &'a str {
+/// The block a window's keys go to, of those Shepherd shows: a minimized layer's are the layout's.
+fn focused_block<'a>(window: &'a Value, frames: &'a [(String, Rect, Option<String>)]) -> &'a str {
     let focused = text_of(&window["focused_block_id"]);
-    if frames.iter().any(|(block, _)| block == focused) { focused } else { frames.first().map_or("", |(block, _)| block) }
+    if frames.iter().any(|(block, ..)| block == focused) { focused } else { frames.first().map_or("", |(block, ..)| block) }
 }
 
 /// A window's name, unless it is the one Rex made from its id: then its place, as a tab of herdr's.
@@ -497,10 +607,13 @@ fn snapshot(views: &[Value], state: &State, checkouts: &Checkouts) -> Snapshot {
         let session = text_of(&view["session_id"]);
         for (t_at, window) in view["windows"].as_array().into_iter().flatten().enumerate() {
             let tab = format!("{session}/{}", text_of(&window["window_id"]));
-            let (frames, splits) = frames(tree(window));
+            let (frames, splits) = laid(window);
             let focused = focused_block(window, &frames);
             let mut laid = Vec::new();
-            for (block, rect) in &frames {
+            // a minimized layer's panes aren't laid out, but run on: their agents and programs mark their buttons
+            let resting = layers(window).iter().filter(|l| l["kind"] == "floating" && l["state"] == "minimized");
+            let resting: Vec<String> = resting.flat_map(|l| self::frames(&l["layout"]).0).map(|(block, _)| block).collect();
+            for block in frames.iter().map(|(block, ..)| block).chain(&resting) {
                 let known = state.blocks.get(block).cloned().unwrap_or_default();
                 let pane = format!("{session}/{block}");
                 out.panes.push(Pane {
@@ -514,7 +627,9 @@ fn snapshot(views: &[Value], state: &State, checkouts: &Checkouts) -> Snapshot {
                     report: Some(known.report),
                     ..Pane::default()
                 });
-                laid.push(LayoutPane { pane_id: pane, focused: block == focused, rect: *rect });
+            }
+            for (block, rect, layer) in &frames {
+                laid.push(LayoutPane { pane_id: format!("{session}/{block}"), focused: block == focused, rect: *rect, layer: layer.clone() });
             }
             out.tabs.push(Tab { tab_id: tab.clone(), workspace_id: session.to_string(), label: tab_label(window, t_at + 1), number: t_at as u32 + 1, agent_status: AgentStatus::Unknown });
             out.layouts.push(Layout {
@@ -524,6 +639,7 @@ fn snapshot(views: &[Value], state: &State, checkouts: &Checkouts) -> Snapshot {
                 area: Rect { x: 0, y: 0, width: AREA, height: AREA },
                 panes: laid,
                 splits,
+                minimized: minimized(window, session, state),
             });
         }
         out.workspaces.push(Workspace {
@@ -540,7 +656,7 @@ fn snapshot(views: &[Value], state: &State, checkouts: &Checkouts) -> Snapshot {
     let session = focused.map_or("", |v| text_of(&v["session_id"]));
     out.focused_workspace_id = focused.map(|_| session.to_string());
     out.focused_tab_id = focused.map(|v| format!("{session}/{}", text_of(&v["active_window_id"])));
-    out.focused_pane_id = window.map(|w| format!("{session}/{}", focused_block(w, &frames(tree(w)).0)));
+    out.focused_pane_id = window.map(|w| format!("{session}/{}", focused_block(w, &laid(w).0)));
     out
 }
 
@@ -697,11 +813,34 @@ mod tests {
     }
 
     #[test]
-    fn a_floating_block_leaves_the_keys_to_the_layout() {
+    fn a_floating_layer_floats_over_the_split_until_minimized() {
         let mut floating = views();
+        let layer = json!({"layer_id": "layer:f", "kind": "floating", "bounds": [0.2, 0.1, 0.6, 0.5], "layout": {"rect": [0.2, 0.1, 0.6, 0.5], "block_id": "block:float"}});
+        floating[0]["windows"][1]["layers"].as_array_mut().unwrap().push(layer);
         floating[0]["windows"][1]["focused_block_id"] = json!("block:float");
         let s = read(&floating, &state());
-        assert_eq!(s.focused_pane_id.as_deref(), Some("session:1/block:a"));
+        assert_eq!(s.focused_pane_id.as_deref(), Some("session:1/block:float"));
+        let frames = s.pane_frames("session:1/window:2");
+        let last = frames.last().unwrap();
+        assert_eq!((last.pane_id.as_str(), last.layer.as_deref(), last.frame.x), ("session:1/block:float", Some("layer:f"), 0.2), "drawn last, over the split");
+        assert_eq!(s.split_frames("session:1/window:2").len(), 1, "a layer's own splits aren't the tab's");
+        let layout = s.layouts.iter().find(|l| l.tab_id == "session:1/window:2").unwrap();
+        assert_eq!(layout.neighbor("session:1/block:a", crate::commands::Direction::Right), Some("session:1/block:b"), "past what floats");
+
+        floating[0]["windows"][1]["layers"][1]["state"] = json!("minimized");
+        let s = read(&floating, &state());
+        assert_eq!(s.focused_pane_id.as_deref(), Some("session:1/block:a"), "a minimized layer leaves the keys to the layout");
+        assert_eq!(s.pane_frames("session:1/window:2").len(), 2);
+        assert!(s.panes.iter().any(|p| p.pane_id == "session:1/block:float"), "it runs on: its agent and program mark its button");
+    }
+
+    #[test]
+    fn a_program_goes_by_the_name_it_was_started_as() {
+        let claude = json!({"name": "2.1.319", "path": "/Users/me/.local/share/claude/versions/2.1.319", "argv0": "claude"});
+        assert_eq!(program_name(&claude).as_deref(), Some("claude"));
+        assert_eq!(program_name(&json!({"name": "nvim", "argv0": "/opt/homebrew/bin/nvim"})).as_deref(), Some("nvim"));
+        assert_eq!(program_name(&json!({"name": "zsh", "argv0": "-zsh"})).as_deref(), Some("zsh"), "a login shell's dash");
+        assert_eq!(program_name(&json!({"name": "htop"})).as_deref(), Some("htop"));
     }
 
     #[test]
@@ -878,10 +1017,33 @@ mod tests {
         let shot = until(b, "a zoom", |s| s.layouts.iter().any(|l| l.tab_id == tab && l.zoomed)).await;
         assert_eq!(shot.workspaces.iter().find(|w| w.workspace_id == workspace).unwrap().label, "renamed");
         mux.run(Command::Zoom { pane_id: second.clone() }).await.unwrap();
+        // a pane floats over the split, is moved and raised there, and docks back into it
+        let floats = |s: &Snapshot| s.pane_frames(&tab).into_iter().find(|f| f.pane_id == second && f.layer.is_some());
+        mux.float(second.clone(), Float::Out).await.unwrap();
+        let shot = until(b, "a floating pane", |s| floats(s).is_some()).await;
+        assert!(shot.split_frames(&tab).is_empty(), "the split is the other pane alone");
+        mux.float(second.clone(), Float::Place(Frac { x: 0.5, y: 0.5, w: 0.4, h: 0.4 })).await.unwrap();
+        mux.float(second.clone(), Float::Raise).await.unwrap();
+        until(b, "a moved floating pane", |s| floats(s).is_some_and(|f| (f.frame.x - 0.5).abs() < 0.01 && (f.frame.w - 0.4).abs() < 0.01)).await;
+        // minimized to a button at the tab's foot, and back
+        let minimized = |s: &Snapshot| s.layouts.iter().find(|l| l.tab_id == tab).is_some_and(|l| l.minimized.iter().any(|m| m.pane_id == second));
+        mux.float(second.clone(), Float::Minimize).await.unwrap();
+        let shot = until(b, "a minimized pane", minimized).await;
+        assert!(floats(&shot).is_none(), "not drawn while minimized");
+        mux.float(second.clone(), Float::Restore).await.unwrap();
+        until(b, "a restored pane", |s| !minimized(s) && floats(s).is_some()).await;
+        mux.float(second.clone(), Float::Dock).await.unwrap();
+        until(b, "a docked pane", |s| s.split_frames(&tab).len() == 1 && floats(s).is_none()).await;
         let moved = mux.run(Command::MovePaneToNewTab { pane_id: second.clone(), workspace_id: None }).await.unwrap().tab_id.unwrap();
         let shot = until(b, "a pane in its own tab", |s| s.panes.iter().any(|p| p.pane_id == second && p.tab_id == moved)).await;
         assert_eq!(shot.pane_frames(&moved).len(), 1, "the shell that held its place is gone");
         assert!(mux.run(Command::MovePaneToNewTab { pane_id: second.clone(), workspace_id: Some("session:other".into()) }).await.is_err());
+        // the split's last pane closed under a floating one: that one takes its place, not a tab of layers alone
+        let third = mux.run(Command::Split { pane_id: second.clone(), down: false, cwd: None }).await.unwrap().pane_id.unwrap();
+        mux.float(third.clone(), Float::Out).await.unwrap();
+        until(b, "a floating third pane", |s| s.pane_frames(&moved).iter().any(|f| f.pane_id == third && f.layer.is_some())).await;
+        mux.run(Command::ClosePane { pane_id: second.clone() }).await.unwrap();
+        until(b, "the floating pane docked", |s| s.pane_frames(&moved).iter().map(|f| (f.pane_id.as_str(), f.layer.is_none())).eq([(third.as_str(), true)])).await;
 
         mux.run(Command::ClosePane { pane_id: first.clone() }).await.unwrap();
         until(b, "a closed pane", |s| !s.panes.iter().any(|p| p.pane_id == first)).await;
@@ -905,7 +1067,7 @@ mod tests {
         let tree = shot.workspaces.iter().find(|w| w.workspace_id == linked).unwrap().worktree.clone().unwrap();
         assert!(tree.is_linked_worktree);
         assert_eq!(shot.workspaces.iter().find(|w| w.workspace_id == linked).unwrap().label, "fix-rex");
-        let core = tokio::task::spawn_blocking(|| Control::open(|_| {})).await.unwrap().unwrap();
+        let core = tokio::task::spawn_blocking(|| Control::open(&Endpoint::local().unwrap(), |_| {})).await.unwrap().unwrap();
         let listed = core.call("session.list", json!({})).await.unwrap();
         let kept = format!("\u{f126} {}/fix-rex", crate::worktree::repo_name(&tree).unwrap());
         assert!(listed["sessions"].as_array().unwrap().iter().any(|s| s["label"] == kept.as_str()), "{listed}");

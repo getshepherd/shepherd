@@ -325,7 +325,7 @@ impl Shell {
                             this.open_place_edit(edit.clone(), window, cx)
                         })))
                         .when(place.deletable(), |el| {
-                            let label = if matches!(place, sessions::Place::Machine(_)) { "Forget…" } else { "Delete…" };
+                            let label = if place.remote() { "Forget…" } else { "Delete…" };
                             el.child(div().mx(px(-4.)).my(px(4.)).h(px(1.)).bg(theme.border)).child(
                                 row(theme, false, "place-menu-delete")
                                     .h(px(28.))
@@ -797,6 +797,11 @@ impl Shell {
                     format!("herdr forgets {}. Its session keeps running on {}.", m.label, m.target),
                     "Forget",
                 ),
+                sessions::Place::Rex(host) => (
+                    "Forget host?",
+                    format!("Rex forgets {}. Its server keeps running there.", host.as_ref().map_or("", |h| h.label.as_str())),
+                    "Forget",
+                ),
             };
             let card = dialog_card(theme, "session-delete-dialog", title)
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| this.finish_delete(false, cx)))
@@ -1061,6 +1066,19 @@ impl Shell {
                 ("ToggleZoom", |pane_id| Command::Zoom { pane_id }),
                 ("ClosePane", |pane_id| Command::ClosePane { pane_id }),
             ];
+            // Rex floats panes over the tab's split; the others have none
+            let float: Vec<(&str, &str, crate::backend::Float)> = match (self.backend.kind() == crate::backend::Kind::Rex, self.pane_layer(&pane_id)) {
+                (false, _) => Vec::new(),
+                (true, Some(_)) => vec![
+                    ("Minimize pane", "icons/alt-arrow-down.svg", crate::backend::Float::Minimize),
+                    ("Dock pane", "icons/window-minimize.svg", crate::backend::Float::Dock),
+                ],
+                // the split's last pane stays in it
+                (true, None) if self.can_float(&pane_id) => vec![("Float pane", "icons/window-restore.svg", crate::backend::Float::Out)],
+                (true, None) => Vec::new(),
+            };
+            // a zoomed pane's menu unzooms it
+            let zoomed = self.snapshot.as_ref().is_some_and(|s| s.layouts.iter().any(|l| l.zoomed && l.focused_pane_id == pane_id));
             gpui::deferred(
                 gpui::anchored().position(at).snap_to_window_with_margin(px(8.)).child(crate::ui::menu_motion(
                     "pane-menu-in",
@@ -1071,23 +1089,41 @@ impl Shell {
                             cx.notify();
                         }))
                         .children(items.into_iter().enumerate().flat_map(|(i, (action, make))| {
-                            let label = ACTIONS.iter().find(|(a, _)| *a == action).map_or(action, |(_, l)| l);
+                            let unzoom = zoomed && action == "ToggleZoom";
+                            let label = if unzoom { "Unzoom pane" } else { ACTIONS.iter().find(|(a, _)| *a == action).map_or(action, |(_, l)| l) };
+                            let icon = if unzoom { "icons/collapse-arrows.svg" } else { crate::ui::command_panel::action_icon(action) };
                             let chord = chords.iter().find(|(a, _)| a == action).map(|(_, k)| crate::ui::settings::display_chord(k));
                             let close = action == "ClosePane";
                             let pane_id = pane_id.clone();
                             let separator = close.then(|| div().mx(px(-4.)).my(px(4.)).h(px(1.)).bg(theme.border).into_any_element());
+                            let float = float.iter().filter(|_| close).enumerate().map(|(n, &(label, icon, change))| {
+                                let pane_id = pane_id.clone();
+                                row(theme, false, ("pane-menu-float", n))
+                                    .h(px(28.))
+                                    .rounded(px(6.))
+                                    .child(menu_mark(icon, theme.text_muted))
+                                    .child(div().flex_1().child(label))
+                                    .on_pick(at, cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        if let Some(m) = this.pane_menu.as_mut() { m.close() }
+                                        match change {
+                                            crate::backend::Float::Minimize => this.minimize_pane(&pane_id, cx),
+                                            change => this.float_pane(pane_id.clone(), change, cx),
+                                        }
+                                    }))
+                                    .into_any_element()
+                            }).collect::<Vec<_>>();
                             let item = row(theme, false, ("pane-menu-item", i))
                                 .h(px(28.))
                                 .rounded(px(6.))
                                 .when(close, |el| el.text_color(theme.danger))
-                                .child(crate::ui::icon(crate::ui::command_panel::action_icon(action), 14., if close { theme.danger } else { theme.text_muted }, theme.accent))
+                                .child(crate::ui::icon(icon, 14., if close { theme.danger } else { theme.text_muted }, theme.accent))
                                 .child(div().flex_1().child(label))
                                 .when_some(chord, |el, chord| el.child(div().text_size(px(11.)).text_color(theme.text_faint).child(chord)))
                                 .on_pick(at, cx.listener(move |this, _: &ClickEvent, _, cx| {
                                     if let Some(m) = this.pane_menu.as_mut() { m.close() }
                                     this.send(make(pane_id.clone()), cx, |_, _, _| {});
                                 }));
-                            separator.into_iter().chain([item.into_any_element()])
+                            float.into_iter().chain(separator).chain([item.into_any_element()])
                         })),
                 )),
             )
