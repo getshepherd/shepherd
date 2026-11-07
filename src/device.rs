@@ -471,6 +471,7 @@ impl Session {
             Session::Android(s) => s.scroll(phase, x, y, dx, dy, wheel),
             // ponytail: a USB phone doesn't scroll yet; the emulator's drag (android::Session::scroll) would do over
             // scrcpy's touches too
+            #[cfg(target_os = "macos")]
             Session::Phone(_) => {}
         }
     }
