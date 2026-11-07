@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-const LATEST: &str = "https://api.github.com/repos/freethinkel/shepherd/releases/latest";
+const LATEST: &str = "https://api.github.com/repos/getshepherd/shepherd/releases/latest";
 /// What a release's page must start with before a click opens it.
-const PAGES: &str = "https://github.com/freethinkel/shepherd/releases/";
+const PAGES: &str = "https://github.com/getshepherd/shepherd/releases/";
 const EVERY: Duration = Duration::from_secs(6 * 3600);
 /// The release zips' arch, as `uname -m` names it in the Makefile.
 const ARCH: &str = if cfg!(target_arch = "aarch64") { "arm64" } else { "x86_64" };
@@ -362,10 +362,10 @@ mod tests {
     #[test]
     fn the_release_page() {
         let page = |url: &str| page_of(&serde_json::json!({ "tag_name": "v0.2.0", "html_url": url, "assets": [] }));
-        let url = "https://github.com/freethinkel/shepherd/releases/tag/v0.2.0";
+        let url = "https://github.com/getshepherd/shepherd/releases/tag/v0.2.0";
         assert_eq!(page(url), Some(Release { version: "0.2.0".into(), url: url.into(), size: 0 }));
-        assert_eq!(page("https://github.com/freethinkel/shepherd-evil/releases/tag/v0.2.0"), None);
-        assert_eq!(page("http://github.com/freethinkel/shepherd/releases/tag/v0.2.0"), None);
+        assert_eq!(page("https://github.com/getshepherd/shepherd-evil/releases/tag/v0.2.0"), None);
+        assert_eq!(page("http://github.com/getshepherd/shepherd/releases/tag/v0.2.0"), None);
         assert_eq!(page_of(&serde_json::json!({ "tag_name": "v0.2.0" })), None);
     }
 

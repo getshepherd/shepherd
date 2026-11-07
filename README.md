@@ -30,7 +30,7 @@ https://github.com/user-attachments/assets/9b3f5fae-8eee-4697-89b4-37d232250117
 
 ## Install
 
-Download `Shepherd-<version>-universal.dmg` from [Releases](https://github.com/freethinkel/shepherd/releases), open it and drag Shepherd to Applications. One build runs on Apple silicon and Intel Macs. It's signed and notarized, so Gatekeeper opens it without a prompt. The same app is also there as a zip.
+Download `Shepherd-<version>-universal.dmg` from [Releases](https://github.com/getshepherd/shepherd/releases), open it and drag Shepherd to Applications. One build runs on Apple silicon and Intel Macs. It's signed and notarized, so Gatekeeper opens it without a prompt. The same app is also there as a zip.
 
 ### Linux
 

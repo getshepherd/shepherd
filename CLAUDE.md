@@ -57,7 +57,7 @@ Before opening a PR, and in its description:
   `:text-size` the rail's Text size menu). If a change has
   nothing to see (an internal refactor, a backend fix), say so instead.
   GitHub's API can't attach images: push them to the orphan branch `pr-assets` under `pr-<number>/` and link them as
-  `https://raw.githubusercontent.com/freethinkel/shepherd/pr-assets/pr-<number>/<name>.png`.
+  `https://raw.githubusercontent.com/getshepherd/shepherd/pr-assets/pr-<number>/<name>.png`.
 - **What changed and why.** Explain in plain words what the user sees or can do now and what was wrong or missing
   before, then point to the main places in the code. Show it: the screenshots, plus a short clip or the steps to try
   it when one frame can't show the behavior (a swipe, a shortcut, an animation).
