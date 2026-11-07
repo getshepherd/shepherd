@@ -25,7 +25,7 @@ impl Shell {
 
     /// Whether browser tab `key` shows the ports in place of its page: nothing loaded in it yet.
     pub(super) fn shows_ports(&self, key: &PageKey) -> bool {
-        let url = self.pages.live.get(key).and_then(|p| p.view.url().ok());
+        let url = self.pages.live.get(key).and_then(|p| super::web::page_url(&p.view));
         self.ports_offered() && browser::is_tab(&key.0) && url.is_none_or(|u| u.is_empty() || u == browser::BLANK)
     }
 

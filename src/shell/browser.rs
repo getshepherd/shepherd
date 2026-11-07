@@ -194,7 +194,7 @@ impl Shell {
     pub(super) fn browser_label(&self, id: &str) -> String {
         let page = self.pages.live.get(&(id.to_string(), None));
         let title = page.and_then(|p| p.title.clone());
-        let url = page.and_then(|p| p.view.url().ok()).filter(|u| u != BLANK);
+        let url = page.and_then(|p| super::web::page_url(&p.view)).filter(|u| u != BLANK);
         title.or_else(|| url.and_then(|u| u.parse::<http::Uri>().ok()?.host().map(str::to_string))).unwrap_or_else(|| "New Tab".into())
     }
 
@@ -252,7 +252,7 @@ impl Shell {
     /// The address field shows the page's URL, unless it is being typed in.
     fn show_address(&mut self, key: &PageKey, window: &mut Window, cx: &mut Context<Self>) {
         let Some(a) = self.browser.address.as_ref().filter(|a| a.tab == key.0 && !a.editing) else { return };
-        let url = self.pages.live.get(key).and_then(|p| p.view.url().ok()).filter(|u| u != BLANK).unwrap_or_default();
+        let url = self.pages.live.get(key).and_then(|p| super::web::page_url(&p.view)).filter(|u| u != BLANK).unwrap_or_default();
         if a.input.read(cx).value() != url {
             a.input.update(cx, |input, cx| input.set_value(url, window, cx));
         }
@@ -261,7 +261,7 @@ impl Shell {
     /// A browser tab's page loaded: its address shown, and its site's icon fetched when the site changed.
     pub(super) fn browser_loaded(&mut self, key: &PageKey, window: &mut Window, cx: &mut Context<Self>) {
         self.show_address(key, window, cx);
-        let Some(url) = self.pages.live.get(key).and_then(|p| p.view.url().ok()) else { return };
+        let Some(url) = self.pages.live.get(key).and_then(|p| super::web::page_url(&p.view)) else { return };
         if let Some(site) = site(&url).filter(|s| self.pages.favicons.get(key).is_none_or(|(had, _)| had != s)) {
             self.fetch_favicon(key.clone(), site, url, cx);
         }
@@ -339,7 +339,7 @@ impl Shell {
                     .tooltip(tip("Open in Browser", None))
                     .child(gpui::svg().path("icons/solar/square-arrow-right-up.svg").size(px(16.)).text_color(theme.text_muted))
                     .on_click(move |_, _, cx| {
-                        if let Some(url) = outside.as_deref().and_then(|v| v.url().ok()).filter(|u| u != BLANK) {
+                        if let Some(url) = outside.as_deref().and_then(super::web::page_url).filter(|u| u != BLANK) {
                             crate::ui::open_outside(&url, cx);
                         }
                     }),

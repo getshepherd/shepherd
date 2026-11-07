@@ -18,6 +18,16 @@ pub(super) fn embeds_pages(window: &Window) -> bool {
     !matches!(HasWindowHandle::window_handle(window).map(|h| h.as_raw()), Ok(RawWindowHandle::Wayland(_)))
 }
 
+/// A page's address. Use this, not `WebView::url`: wry's macOS one unwraps WKWebView's `URL`, which is nil until a
+/// load commits, so a page whose first load failed (a port nothing listens on) took the app down on its next frame.
+pub(super) fn page_url(view: &wry::WebView) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    if !host::has_url(view) {
+        return None;
+    }
+    view.url().ok()
+}
+
 /// The window a page goes in, as wry takes it: GPUI's X11 window hands an XCB handle, and WebKitGTK's wry takes only an
 /// Xlib one; both name the same X window.
 #[cfg(target_os = "linux")]
@@ -897,7 +907,7 @@ impl Shell {
     /// Without a page shown, the shown pull request's link.
     pub(super) fn copy_page_url(&mut self, window: &Window, cx: &mut Context<Self>) {
         let Some((key, entry)) = self.visible_entry(window, cx) else { return self.copy_review(true, window, cx) };
-        let now = self.pages.live.get(&key).filter(|_| key.1.is_none()).and_then(|p| p.view.url().ok());
+        let now = self.pages.live.get(&key).filter(|_| key.1.is_none()).and_then(|p| page_url(&p.view));
         let url = now.unwrap_or_else(|| normalize(&entry.url));
         // an empty browser tab has nothing to copy
         if url == "about:blank" {
@@ -1128,6 +1138,13 @@ mod host {
     pub(super) fn loading(view: &wry::WebView) -> bool {
         // SAFETY: `isLoading` on a live WKWebView, on the main thread
         unsafe { msg_send![&*view.webview(), isLoading] }
+    }
+
+    /// Whether WKWebView has an address yet (its `URL` is nil before a load commits).
+    pub(super) fn has_url(view: &wry::WebView) -> bool {
+        // SAFETY: `URL` on a live WKWebView, on the main thread
+        let url: Option<Retained<AnyObject>> = unsafe { msg_send![&*view.webview(), URL] };
+        url.is_some()
     }
 
     /// The page's view, and the key (and click) monitor that takes Shepherd's shortcuts from the page while it has the keyboard
