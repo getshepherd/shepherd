@@ -475,6 +475,42 @@ mod tests {
         assert_eq!(found[0].url(), "http://127.0.0.1:5000/?token=t");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_serve_restarts_when_its_binary_changes_and_after_it_exits() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("sleepy");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("state.json"), r#"{"port":1,"token":"t","start":"shepherd"}"#).unwrap();
+        let binary = dir.join("sleepy");
+        std::fs::write(&binary, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let list = scan(root.path());
+        let pid = || RUNS.lock().unwrap().get("sleepy").and_then(|r| r.child.as_ref().map(Child::id));
+        supervise(&list);
+        let first = pid().expect("started");
+        supervise(&list);
+        assert_eq!(pid(), Some(first), "left running");
+        // installed again: a newer binary
+        let later = SystemTime::now() + Duration::from_secs(5);
+        std::fs::File::options().write(true).open(&binary).unwrap().set_modified(later).unwrap();
+        supervise(&list);
+        let second = pid().expect("restarted");
+        assert_ne!(second, first);
+        // it dies: started again once the pause is over, not before
+        std::process::Command::new("kill").arg(second.to_string()).status().unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        supervise(&list);
+        assert_eq!(pid(), None, "waits");
+        RUNS.lock().unwrap().get_mut("sleepy").unwrap().retry_at = Instant::now();
+        supervise(&list);
+        assert!(pid().is_some_and(|p| p != second), "started again");
+        // switched to login, or gone: stopped
+        supervise(&[]);
+        assert!(RUNS.lock().unwrap().is_empty());
+    }
+
     #[test]
     fn the_theme_script_sets_every_variable_paddock_reads() {
         let theme = Theme::for_appearance(gpui::WindowAppearance::Dark);
