@@ -2,9 +2,15 @@
 //! `EditorState`, colored by `zeron_syntax` through a highlighter that shifts its spans with each edit until the next
 //! highlight lands. Its colors are the panes' (`crate::ui::markdown::syntax_color`), not Zeron's palette.
 use crate::theme::Theme;
-use gpui::{AppContext as _, Context, DispatchPhase, Entity, HighlightStyle, IntoElement, PlatformInput, ScrollDelta, ScrollWheelEvent, SharedString, Styled as _, Window, canvas};
+use gpui::{AppContext as _, Context, DispatchPhase, Entity, EntityId, HighlightStyle, IntoElement, PlatformInput, ScrollDelta, ScrollWheelEvent, SharedString, Styled as _, TouchPhase, Window, canvas, point, px};
 use gpui_base::input::{EditorState, FoldRange, HighlightStyleResolver, InputEdit, InputEditorStyle, InputHighlighter, Rope};
-use std::{cell::Cell, ops::Range, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    ops::Range,
+    rc::Rc,
+    sync::Arc,
+    time::Duration,
+};
 use zeron_syntax::{HighlightKind, HighlightedDocument};
 
 /// The theme's color for each highlight name.
@@ -147,30 +153,116 @@ thread_local! {
     static REPLAYING: Cell<bool> = const { Cell::new(false) };
 }
 
-/// The terminal's wheel speed over the editor, which scrolls 1:1: laid over it, this takes the wheel first and sends
-/// it on scaled, so the editor scrolls and clamps it itself (setting its offset would land unclamped after a layout).
-pub(super) fn terminal_wheel() -> impl IntoElement {
+/// The furthest the text shows pulled past an end.
+const BAND: f32 = 120.;
+/// The furthest the wheel's pull past an end counts.
+const MAX_PULL: f32 = 400.;
+/// What a wheel's step or a flick's coasting pulls, against a finger's.
+const LOOSE_PULL: f32 = 0.3;
+/// What is left of the pull each frame as it springs back.
+const SPRING: f32 = 0.78;
+
+/// The editor's rubber band past its first and last lines, as macOS's: the wheel's pull beyond an end shows damped,
+/// and springs back once the fingers lift. Positive past the top, as the wheel's delta is.
+#[derive(Default)]
+pub(super) struct Elastic {
+    pull: f32,
+    finger: bool,
+    /// Each wheel event's: a spring-back runs while it is still the last.
+    run: u64,
+}
+
+impl Elastic {
+    /// How far the text shows moved for the pull: iOS's rubber band, `BAND` at most.
+    pub(super) fn shift(&self) -> f32 {
+        let x = self.pull.abs();
+        self.pull.signum() * (1. - 1. / (x * 0.55 / BAND + 1.)) * BAND
+    }
+
+    /// What of `dy` scrolls the text: a wheel back from the pull first takes the pull up.
+    fn take_back(&mut self, dy: f32) -> f32 {
+        if self.pull == 0. || dy == 0. || dy.signum() == self.pull.signum() {
+            return dy;
+        }
+        let back = dy.abs().min(self.pull.abs());
+        self.pull += dy.signum() * back;
+        dy - dy.signum() * back
+    }
+
+    /// The part of a scroll the editor couldn't make, at its end.
+    fn overshoot(&mut self, leftover: f32) {
+        let pull = if self.finger { 1. } else { LOOSE_PULL };
+        self.pull = (self.pull + leftover * pull).clamp(-MAX_PULL, MAX_PULL);
+    }
+
+    /// One frame of the spring back; true once it is home.
+    fn spring(&mut self) -> bool {
+        self.pull *= SPRING;
+        if self.pull.abs() < 0.5 {
+            self.pull = 0.;
+        }
+        self.pull == 0.
+    }
+}
+
+/// The terminal's wheel speed over the editor, which scrolls 1:1, and `Elastic`'s band at its ends: laid over it, this
+/// takes the wheel first and sends it on scaled, so the editor scrolls and clamps it itself (setting its offset would
+/// land unclamped after a layout), and what it couldn't scroll pulls the band. `view` draws the band.
+pub(super) fn terminal_wheel(elastic: Rc<RefCell<Elastic>>, editor: Entity<EditorState>, view: EntityId) -> impl IntoElement {
     canvas(
         |_, _, _| {},
-        |bounds, _, window, _| {
+        move |bounds, _, window, _| {
             window.on_mouse_event(move |e: &ScrollWheelEvent, phase, window, cx| {
                 if phase != DispatchPhase::Capture || REPLAYING.get() || !bounds.contains(&e.position) {
                     return;
                 }
                 cx.stop_propagation();
-                let speed = crate::terminal::pane::WHEEL_SPEED;
-                let faster = ScrollWheelEvent {
-                    delta: match e.delta {
-                        ScrollDelta::Pixels(d) => ScrollDelta::Pixels(d * speed),
-                        ScrollDelta::Lines(d) => ScrollDelta::Lines(d * speed),
-                    },
-                    ..e.clone()
+                let line = editor.read(cx).line_height().unwrap_or(px(20.));
+                let delta = e.delta.pixel_delta(line) * crate::terminal::pane::WHEEL_SPEED;
+                let dy = {
+                    let mut elastic = elastic.borrow_mut();
+                    match e.touch_phase {
+                        TouchPhase::Started => elastic.finger = true,
+                        TouchPhase::Ended | TouchPhase::Cancelled => elastic.finger = false,
+                        TouchPhase::Moved => {}
+                    }
+                    elastic.run += 1;
+                    elastic.take_back(f32::from(delta.y))
                 };
+                let faster = ScrollWheelEvent { delta: ScrollDelta::Pixels(point(delta.x, px(dy))), ..e.clone() };
+                let (elastic, editor) = (elastic.clone(), editor.clone());
                 // not from here: the window's listeners are out while it dispatches
                 window.defer(cx, move |window, cx| {
+                    let before = editor.read(cx).scroll_offset().y;
                     REPLAYING.set(true);
                     window.dispatch_event(PlatformInput::ScrollWheel(faster), cx);
                     REPLAYING.set(false);
+                    let moved = f32::from(editor.read(cx).scroll_offset().y - before);
+                    let (settle, run) = {
+                        let mut elastic = elastic.borrow_mut();
+                        elastic.overshoot(dy - moved);
+                        (!elastic.finger && elastic.pull != 0., elastic.run)
+                    };
+                    cx.notify(view);
+                    if settle {
+                        cx.spawn(async move |cx| {
+                            loop {
+                                cx.background_executor().timer(Duration::from_millis(16)).await;
+                                let home = {
+                                    let mut elastic = elastic.borrow_mut();
+                                    if elastic.run != run || elastic.finger {
+                                        return;
+                                    }
+                                    elastic.spring()
+                                };
+                                cx.update(|cx| cx.notify(view));
+                                if home {
+                                    return;
+                                }
+                            }
+                        })
+                        .detach();
+                    }
                 });
             });
         },
@@ -289,6 +381,26 @@ mod tests {
         assert_eq!(runs.first().unwrap().0.start, 0);
         assert_eq!(runs.last().unwrap().0.end, source.len());
         assert!(runs.windows(2).all(|pair| pair[0].0.end == pair[1].0.start));
+    }
+
+    #[test]
+    fn the_band_pulls_damped_gives_back_first_and_springs_home() {
+        let mut band = Elastic { finger: true, ..Default::default() };
+        band.overshoot(60.);
+        let shown = band.shift();
+        assert!(shown > 0. && shown < 60.);
+        band.overshoot(10_000.);
+        assert!(band.shift() < BAND);
+        // scrolling back takes the pull up before the text moves
+        assert_eq!(band.take_back(-100.), 0.);
+        assert_eq!(band.take_back(-1_000.), -(1_000. - (MAX_PULL - 100.)));
+        assert_eq!(band.pull, 0.);
+        band.finger = false;
+        band.overshoot(-100.);
+        assert_eq!(band.pull, -100. * LOOSE_PULL);
+        assert!(band.shift() < 0.);
+        while !band.spring() {}
+        assert_eq!(band.shift(), 0.);
     }
 
     #[test]
