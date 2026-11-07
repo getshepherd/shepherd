@@ -1,5 +1,5 @@
 //! Settings → Extensions, above the pages added by hand: the extensions installed (`crate::extensions`), whether each
-//! runs always or with Shepherd, their folder, and installing one from a GitHub release.
+//! runs always or with Shepherd, removing one, their folder, and installing one from a GitHub release.
 use super::*;
 use crate::extensions::{self as ext, Extension, Extensions, Release};
 
@@ -13,6 +13,24 @@ pub(super) enum Install {
     /// Found: installing runs it, so it waits for a yes.
     Confirm(Release),
     Installing,
+}
+
+/// `action`'s pill in `bg`, for the yes of a confirmation; its own, since a second `hover` on one panics.
+fn filled(id: &'static str, label: &'static str, bg: gpui::Hsla, fg: gpui::Hsla) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .min_h(px(32.))
+        .px(px(10.))
+        .flex()
+        .items_center()
+        .rounded(px(8.))
+        .bg(bg)
+        .text_color(fg)
+        .text_size(px(12.5))
+        .cursor_pointer()
+        .hover(move |s| s.bg(bg.opacity(0.88)))
+        .child(label)
 }
 
 /// The two ways an extension runs, as its state's `start` and the choice's label.
@@ -35,9 +53,21 @@ impl SettingsView {
     }
 
     fn switch_start(&mut self, e: Extension, start: &'static str, cx: &mut Context<Self>) {
-        (self.ext_busy, self.ext_note) = (Some(e.name.clone()), None);
+        (self.ext_busy, self.ext_note) = (Some((e.name.clone(), "Switching…")), None);
         self.ext_job(
             move || ext::set_start(&e, start),
+            |v, result| {
+                v.ext_busy = None;
+                v.ext_note = result.err();
+            },
+            cx,
+        );
+    }
+
+    fn remove_extension(&mut self, e: Extension, cx: &mut Context<Self>) {
+        (self.ext_busy, self.ext_remove, self.ext_note) = (Some((e.name.clone(), "Removing…")), None, None);
+        self.ext_job(
+            move || ext::uninstall(&e),
             |v, result| {
                 v.ext_busy = None;
                 v.ext_note = result.err();
@@ -81,8 +111,26 @@ impl SettingsView {
         let list = cx.try_global::<Extensions>().map(|e| e.0.clone()).unwrap_or_default();
         let empty = list.is_empty();
         let rows = list.into_iter().enumerate().map(|(i, e)| {
-            let busy = self.ext_busy.as_deref() == Some(e.name.as_str());
-            let state = if busy { "Switching…" } else if e.alive { "Running" } else { "Not running" };
+            let busy = self.ext_busy.as_ref().filter(|(name, _)| *name == e.name).map(|(_, doing)| *doing);
+            if self.ext_remove.as_ref() == Some(&e.name) {
+                let danger = theme.danger;
+                return card_row(theme, i == 0)
+                    .child(row_text(
+                        theme,
+                        format!("Remove {}?", e.name),
+                        "Its service, its skill and its binary go. Its data stays in its folder, for when it is installed again.",
+                    ))
+                    .child(action(theme, "ext-remove-cancel", "Cancel").on_click(cx.listener(|v, _: &ClickEvent, _, cx| {
+                        v.ext_remove = None;
+                        cx.notify();
+                    })))
+                    .child(
+                        filled("ext-remove-yes", "Remove", danger, gpui::white())
+                            .on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.remove_extension(e.clone(), cx))),
+                    );
+            }
+            let state = busy.unwrap_or(if e.alive { "Running" } else { "Not running" });
+            let busy = busy.is_some();
             let status = div()
                 .flex_none()
                 .flex()
@@ -98,11 +146,18 @@ impl SettingsView {
                     .when(!current && !busy, |el| el.on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.switch_start(e.clone(), start, cx))))
             }));
             let description = if e.description.is_empty() { e.binary.display().to_string() } else { e.description.clone() };
-            card_row(theme, i == 0).child(row_text(theme, e.name.clone(), description)).child(status).child(choices)
+            let name = e.name.clone();
+            let remove = remove_button(theme, format!("ext-remove-{name}")).mt(px(0.)).when(!busy, |el| {
+                el.on_click(cx.listener(move |v, _: &ClickEvent, _, cx| {
+                    v.ext_remove = Some(name.clone());
+                    cx.notify();
+                }))
+            });
+            card_row(theme, i == 0).child(row_text(theme, e.name.clone(), description)).child(status).child(choices).child(remove)
         });
         let install = match &self.install {
             Install::Confirm(release) => {
-                let (release, accent) = (release.clone(), theme.accent);
+                let release = release.clone();
                 card_row(theme, true)
                     .child(row_text(
                         theme,
@@ -114,10 +169,7 @@ impl SettingsView {
                         cx.notify();
                     })))
                     .child(
-                        action(theme, "ext-install-yes", "Install")
-                            .text_color(theme.on_accent)
-                            .bg(theme.accent)
-                            .hover(move |s| s.bg(accent.opacity(0.88)))
+                        filled("ext-install-yes", "Install", theme.accent, theme.on_accent)
                             .on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.install_release(release.clone(), cx))),
                     )
             }

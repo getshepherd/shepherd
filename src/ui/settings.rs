@@ -166,8 +166,10 @@ pub struct SettingsView {
     ext_repo: Entity<InputState>,
     install: extensions::Install,
     install_note: Option<String>,
-    /// The extension whose start is being switched, and why the last switch failed.
-    ext_busy: Option<String>,
+    /// The extension being switched or removed, with what it says meanwhile; why the last switch or removal failed.
+    ext_busy: Option<(String, &'static str)>,
+    /// The extension whose removal waits for a yes.
+    ext_remove: Option<String>,
     ext_note: Option<String>,
     /// The web pages' name and URL fields, in the settings' order; made as entries come, dropped as they go.
     web_fields: Vec<WebFields>,
@@ -428,6 +430,7 @@ impl SettingsView {
             install: Default::default(),
             install_note: None,
             ext_busy: None,
+            ext_remove: None,
             ext_note: None,
             web_fields: Vec::new(),
             places: None,
@@ -445,12 +448,6 @@ impl SettingsView {
             focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
-        // SHEPHERD_SETTINGS=<section>, its label in any case (`extensions`), opens Settings on it, for screenshots.
-        if let Ok(name) = std::env::var("SHEPHERD_SETTINGS")
-            && let Some(section) = Section::ALL.into_iter().find(|s| s.label().eq_ignore_ascii_case(&name))
-        {
-            view.section = section;
-        }
         // SHEPHERD_SELECT=<select id>[:query] opens that list at launch, filtered, for screenshots.
         if let Ok(spec) = std::env::var("SHEPHERD_SELECT") {
             let (id, query) = spec.split_once(':').unwrap_or((spec.as_str(), ""));
