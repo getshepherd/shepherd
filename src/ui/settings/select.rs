@@ -228,7 +228,9 @@ impl SettingsView {
         let kinds: Vec<Kind> = Kind::ALL.into_iter().filter(|k| k.installed() || *k == current).collect();
         let labels = kinds.iter().map(|k| SharedString::from(k.name())).collect();
         let index = kinds.iter().position(|k| *k == current);
-        self.select(theme, "backend-select", labels, index, SharedString::default(), |_| None, move |i, cx| crate::shell::set_backend(kinds[i], cx), cx)
+        let (icons, muted) = (kinds.iter().map(|k| k.icon()).collect::<Vec<_>>(), theme.text_muted);
+        let leading = move |i: usize| Some(gpui::svg().path(icons[i]).size(px(14.)).flex_none().text_color(muted).into_any_element());
+        self.select(theme, "backend-select", labels, index, SharedString::default(), leading, move |i, cx| crate::shell::set_backend(kinds[i], cx), cx)
     }
 
     /// Every installed family (Zed's font picker); a family named in settings.json that is not installed shows as itself.

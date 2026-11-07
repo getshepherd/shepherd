@@ -36,8 +36,17 @@ impl Kind {
         match self {
             Kind::Herdr => "herdr",
             Kind::Hc => "herdr-core",
-            Kind::Rex => "Rex",
+            Kind::Rex => "rex",
             Kind::Tmux => "tmux",
+        }
+    }
+
+    /// Its mark in the backend pickers; herdr-core runs on herdr's, as in mochi.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Kind::Herdr | Kind::Hc => "icons/herdr-mark.svg",
+            Kind::Rex => "icons/rex-mark.svg",
+            Kind::Tmux => "icons/tmux-mark.svg",
         }
     }
 

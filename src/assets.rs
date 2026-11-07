@@ -163,6 +163,8 @@ impl gpui::AssetSource for Assets {
             "lucide-square-pen",
             "zig-mark",
             "tmux-mark",
+            "herdr-mark",
+            "rex-mark",
             "java-mark",
             "mysql-mark",
             "mongodb-mark",
