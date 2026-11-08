@@ -245,7 +245,7 @@ pub fn items(snapshot: Option<&Snapshot>, bindings: &[(String, String)], plugin_
             out.push(Item {
                 key: format!("tab:{}", t.tab_id),
                 section: Section::Tabs,
-                icon: "icons/terminal.svg",
+                icon: "icons/prompt.svg",
                 label: short_tab_label(&t.label).to_string(),
                 hint: Some(w.label.clone()),
                 chord: None,
@@ -654,7 +654,7 @@ impl Render for Panel {
                         }
                     }))
                     .on_click(cx.listener(move |panel, _, _, cx| panel.run(row, cx)))
-                    .child(crate::ui::icon(item.icon, 16., icon_ink(item.icon, if selected { theme.text } else { theme.text_muted }), theme.accent))
+                    .child(crate::ui::icon(item.icon, 16., icon_ink(item.icon, if selected { theme.text } else { theme.text_muted })))
                     .child(div().flex_1().min_w_0().truncate().child(highlighted(&item.label, &self.query, &theme)))
                     .children(item.hint.clone().map(|hint| div().flex_none().max_w(px(160.)).truncate().text_size(px(12.)).text_color(theme.text_faint).child(hint)))
                     .children(item.status.map(|status| crate::shell::status_dot(status, &theme)))

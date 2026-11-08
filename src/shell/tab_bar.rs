@@ -1,6 +1,6 @@
 //! The tab bar: herdr's tabs, with what runs in each as colored favicons, one per kind of agent or program
 //! (Superlogical's tabs). The strip itself is `tabs`'.
-use super::tabs::{Leading, Mark, TAB_TOP, Tab, Tabs, label_width, new_tab_button, plain_tint, tab_element, tab_width, tile};
+use super::tabs::{Leading, Mark, TAB_TOP, Tab, Tabs, label_width, new_tab_button, tab_element, tab_width, tile};
 use super::*;
 
 /// The most tiles a tab shows, as Rex's horizontal tabs; the rest of its panes go unmarked.
@@ -26,12 +26,11 @@ fn agent_icon(agent: Option<&str>) -> &'static str {
 }
 
 /// The favicon's tile and mark: the brand's colors (black for monochrome brands, as their app icons are), an
-/// inverted tile for agents without a mark, a muted one for a shell.
+/// inverted tile for agents without a mark, the terminal icon's own for a shell.
 fn agent_tint(agent: Option<&str>, theme: &Theme) -> (Hsla, Hsla) {
     match agent {
-        // a shell's `>_` in the theme's accent, as the terminal icon elsewhere; on a light theme the tile goes pale, so the accent reads on it
-        None if theme.appearance == crate::theme::Appearance::Light => (theme.text_muted.opacity(0.2), theme.accent),
-        None => (plain_tint(theme).0, theme.accent),
+        // a shell's: the terminal icon's own colors, as Rex's, whatever the theme
+        None => brand(crate::ui::TERMINAL_TILE, crate::ui::TERMINAL_PROMPT),
         Some("claude") => brand(0xD97757, 0xFFFFFF),
         Some("codex") => brand(0x10A37F, 0xFFFFFF),
         Some("agy" | "gemini") => brand(0x4285F4, 0xFFFFFF),

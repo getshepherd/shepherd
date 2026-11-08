@@ -83,7 +83,7 @@ impl Render for SettingsView {
                     crate::shell::row(&theme, selected, SharedString::from(format!("settings-{}", section.label())))
                         .text_color(if selected { theme.text } else { theme.text_muted })
                         .when(selected, |el| el.font_weight(FontWeight::MEDIUM))
-                        .child(crate::ui::icon(section.icon(), 16., theme.text_muted, theme.accent))
+                        .child(crate::ui::icon(section.icon(), 16., theme.text_muted))
                         .child(section.label())
                         .on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.show_section(section, cx)))
                 },

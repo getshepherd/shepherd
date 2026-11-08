@@ -17,20 +17,28 @@ use gpui::{App, ElementId, px};
 use gpui_base::input::InputEditorStyle;
 use gpui_base::{Scrollbar, ScrollbarHandle, ScrollbarStyles, ScrollbarThumbStyle};
 
-/// An icon in `ink`. The terminal's is two-tone: its frame in `ink`, the `>_` inside in `accent` (an svg takes one color,
-/// so the two are layered).
-pub fn icon(path: &'static str, size: f32, ink: gpui::Hsla, accent: gpui::Hsla) -> gpui::AnyElement {
-    use gpui::{IntoElement, ParentElement, Styled, div, svg};
-    if path != "icons/terminal.svg" {
+/// The terminal's tile, as Rex draws it: near black, lit from above, with a green `>_`. The same in every theme.
+pub const TERMINAL_TILE: u32 = 0x2B2D31;
+pub const TERMINAL_PROMPT: u32 = 0x7EE787;
+
+/// An icon in `ink`; `icons/prompt.svg`, the terminal's, on its own tile in its own colors instead.
+pub fn icon(path: &'static str, size: f32, ink: gpui::Hsla) -> gpui::AnyElement {
+    use gpui::{IntoElement, ParentElement, Styled, div, linear_color_stop, linear_gradient, svg};
+    if path != "icons/prompt.svg" {
         return svg().path(path).size(px(size)).flex_none().text_color(ink).into_any_element();
     }
-    let layer = |path: &'static str, color| svg().path(path).absolute().inset_0().size(px(size)).text_color(color);
+    let bg: gpui::Hsla = gpui::rgb(TERMINAL_TILE).into();
     div()
-        .relative()
         .size(px(size))
         .flex_none()
-        .child(layer("icons/terminal-frame.svg", ink))
-        .child(layer("icons/terminal-prompt.svg", accent))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(size * 0.28))
+        .bg(linear_gradient(180., linear_color_stop(bg.blend(gpui::white().opacity(0.07)), 0.), linear_color_stop(bg.blend(gpui::black().opacity(0.12)), 1.)))
+        .border_1()
+        .border_color(gpui::white().opacity(0.12))
+        .child(svg().path(path).size(px((size * 0.66).round())).text_color(gpui::rgb(TERMINAL_PROMPT)))
         .into_any_element()
 }
 

@@ -112,8 +112,6 @@ impl gpui::AssetSource for Assets {
             "split-rows",
             "sun",
             "terminal",
-            "terminal-frame",
-            "terminal-prompt",
             "trash",
             "tuning",
             "widget",

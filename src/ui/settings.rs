@@ -84,7 +84,7 @@ impl Section {
     fn icon(self) -> &'static str {
         match self {
             Section::General => "icons/settings.svg",
-            Section::Terminal => "icons/terminal.svg",
+            Section::Terminal => "icons/prompt.svg",
             Section::Appearance => "icons/tuning.svg",
             Section::Notifications => "icons/bell.svg",
             Section::Usage => "icons/clock-circle.svg",

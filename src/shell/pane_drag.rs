@@ -127,7 +127,7 @@ impl Render for DraggedPane {
             .font_family(theme.font_ui.clone())
             .text_size(px(13.))
             .text_color(theme.text)
-            .child(crate::ui::icon("icons/terminal.svg", 14., theme.text_muted, theme.accent))
+            .child(crate::ui::icon("icons/prompt.svg", 14., theme.text_muted))
             .child(div().truncate().child(self.label.clone()))
             .into_any_element()
     }
