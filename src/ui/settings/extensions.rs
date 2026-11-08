@@ -89,6 +89,46 @@ impl SettingsView {
         );
     }
 
+    /// Asks GitHub for the latest release of each extension installed from it, off the main thread.
+    pub(super) fn check_updates(&mut self, cx: &mut Context<Self>) {
+        let list: Vec<Extension> = cx.try_global::<Extensions>().map(|e| e.0.clone()).unwrap_or_default();
+        // the first scan may not be in yet: asked again on the next draw
+        if list.is_empty() {
+            return;
+        }
+        self.ext_updates = Some(Default::default());
+        for e in list.into_iter().filter(|e| e.source.is_some()) {
+            let name = e.name.clone();
+            self.ext_job(
+                move || ext::update_for(&e),
+                move |v, found| {
+                    v.ext_updates.get_or_insert_default().insert(name, found);
+                },
+                cx,
+            );
+        }
+    }
+
+    /// Installs `release` over `e`, keeping when it runs.
+    fn update_extension(&mut self, e: Extension, release: Release, cx: &mut Context<Self>) {
+        (self.ext_busy, self.ext_note) = (Some((e.name.clone(), "Updating…")), None);
+        let (name, tag, start) = (e.name.clone(), release.tag.clone(), e.start.clone());
+        self.ext_job(
+            move || ext::install(&release, &start),
+            move |v, result| {
+                v.ext_busy = None;
+                match result {
+                    Ok(()) => {
+                        v.ext_updates.get_or_insert_default().insert(name.clone(), Ok(None));
+                        v.ext_note = Some(format!("Updated {name} to {tag}."));
+                    }
+                    Err(why) => v.ext_note = Some(format!("{name} didn't update: {why}")),
+                }
+            },
+            cx,
+        );
+    }
+
     pub(super) fn find_release(&mut self, cx: &mut Context<Self>) {
         let Some(repo) = ext::parse_repo(&self.ext_repo.read(cx).value()) else {
             self.install_note = Some("Type a GitHub repo: owner/name, or its URL.".into());
@@ -109,7 +149,7 @@ impl SettingsView {
         self.install = Install::Installing;
         let what = format!("{} {}", release.repo, release.tag);
         self.ext_job(
-            move || ext::install(&release),
+            move || ext::install(&release, "shepherd"),
             move |v, result| {
                 v.install = Install::Idle;
                 v.install_note = Some(result.map_or_else(|why| format!("{what} didn't install: {why}"), |()| format!("Installed {what}.")));
@@ -146,7 +186,9 @@ impl SettingsView {
             .gap(px(8.))
             .child(div().font_weight(FontWeight::MEDIUM).line_height(px(17.)).child(e.name.clone()))
             .child(div().size(px(6.)).rounded_full().bg(dot))
-            .child(div().text_size(px(12.)).text_color(theme.text_muted).child(state));
+            .child(div().text_size(px(12.)).text_color(theme.text_muted).child(state))
+            // the release it was installed from
+            .children(e.source.as_ref().map(|s| div().text_size(px(12.)).text_color(theme.text_faint).child(s.tag.clone())));
         let description = if e.description.is_empty() { e.binary.display().to_string() } else { e.description.clone() };
         let text = div()
             .flex_1()
@@ -186,7 +228,18 @@ impl SettingsView {
                 cx.notify();
             }))
         });
-        card_row(theme, i == 0).child(text).child(power).child(runs.w(px(208.))).child(remove)
+        let update = match self.ext_updates.as_ref().and_then(|u| u.get(&e.name)) {
+            Some(Ok(Some(release))) if busy.is_none() => {
+                let (e, release) = (e.clone(), release.clone());
+                Some(
+                    action(theme, web_select_id("ext-update", &e.name), format!("Update to {}", release.tag))
+                        .text_color(theme.accent)
+                        .on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.update_extension(e.clone(), release.clone(), cx))),
+                )
+            }
+            _ => None,
+        };
+        card_row(theme, i == 0).child(text).children(update).child(power).child(runs.w(px(208.))).child(remove)
     }
 
     /// Install from GitHub's card: the repo and Install, or the question whether to run the build found.

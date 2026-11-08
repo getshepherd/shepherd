@@ -171,6 +171,9 @@ pub struct SettingsView {
     /// The extension whose removal waits for a yes.
     ext_remove: Option<String>,
     ext_note: Option<String>,
+    /// What GitHub said of each extension installed from it, by name: the release to update to, none when it is up
+    /// to date, or why it couldn't tell. `None` until Extensions is shown with extensions in it: asked once a Settings.
+    ext_updates: Option<std::collections::HashMap<String, Result<Option<crate::extensions::Release>, String>>>,
     /// The web pages' name and URL fields, in the settings' order; made as entries come, dropped as they go.
     web_fields: Vec<WebFields>,
     /// The places a web page can be listed in, as (key, name), once herdr has listed them.
@@ -432,6 +435,7 @@ impl SettingsView {
             ext_busy: None,
             ext_remove: None,
             ext_note: None,
+            ext_updates: None,
             web_fields: Vec::new(),
             places: None,
             backend: settings.backend,

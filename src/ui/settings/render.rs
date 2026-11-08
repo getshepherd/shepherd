@@ -31,6 +31,9 @@ impl Render for SettingsView {
         if self.section == Section::Backend && self.facts.is_none() {
             self.load_facts(settings.backend, cx);
         }
+        if self.section == Section::Extensions && self.ext_updates.is_none() {
+            self.check_updates(cx);
+        }
         // the number fields follow the setting when it changes elsewhere (a chevron, Cmd+=), even while typed in
         let shown = numbers(&settings);
         for (i, input) in [self.font_size.clone(), self.line_height.clone()].into_iter().enumerate() {
