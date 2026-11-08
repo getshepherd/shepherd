@@ -918,6 +918,20 @@ mod tests {
         assert_eq!(tail("a", 5), "a");
     }
 
+    /// Waits for the event `wanted` on a pane's stream.
+    async fn streamed(stream: &mut futures::channel::mpsc::UnboundedReceiver<SessionEvent>, wanted: impl Fn(&SessionEvent) -> bool) -> bool {
+        use futures::StreamExt;
+        let found = async {
+            while let Some(event) = stream.next().await {
+                if wanted(&event) {
+                    return true;
+                }
+            }
+            false
+        };
+        tokio::time::timeout(Duration::from_secs(5), found).await.unwrap_or(false)
+    }
+
     /// Waits for what `done` wants of the snapshots.
     async fn until(backend: &Backend, what: &str, mut done: impl FnMut(&Snapshot) -> bool) -> Snapshot {
         for _ in 0..100 {
@@ -982,6 +996,16 @@ mod tests {
         let core = probe.connected().await.unwrap();
         let size = on_block(&core, &first, "size", json!({})).await.unwrap();
         assert_eq!((size["columns"].as_u64(), size["rows"].as_u64()), (Some(90), Some(20)), "the pane's size is the terminal's");
+
+        // another client takes the block, as a click in Rex.app does: the pane shows it at that client's size until
+        // it gives the block back
+        let (session, block) = ids(&first).unwrap();
+        core.call("session.attach", json!({"session_id": session})).await.unwrap();
+        core.call("session.own_block", json!({"session_id": session, "block_ids": [block], "mode": "take"})).await.unwrap();
+        on_block(&core, &first, "resize", json!({"columns": 100, "rows": 30})).await.unwrap();
+        assert!(streamed(&mut stream, |e| matches!(e, SessionEvent::Size(100, 30))).await, "the owner's size");
+        core.call("session.disown_block", json!({"session_id": session, "block_ids": [block]})).await.unwrap();
+        assert!(streamed(&mut stream, |e| matches!(e, SessionEvent::PaneSize(90, 20))).await, "the pane's again");
         assert!(mux.read(first.clone(), 5, false).await.unwrap().contains("shepherd-42"));
 
         // a second look at the same block, as a second window has: the server replays it to it

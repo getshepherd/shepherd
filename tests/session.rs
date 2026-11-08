@@ -200,7 +200,7 @@ fn live_echo() {
         match recv(&mut rx, Duration::from_millis(200)) {
             Some(SessionEvent::Frame(b)) => seen.extend(b),
             Some(SessionEvent::Ended(why)) => panic!("ended: {why}"),
-            Some(SessionEvent::Restart | SessionEvent::Snapshot(_) | SessionEvent::MouseCapture(_) | SessionEvent::KeyboardFlags(_) | SessionEvent::Size(..)) | None => {}
+            Some(SessionEvent::Restart | SessionEvent::Snapshot(_) | SessionEvent::MouseCapture(_) | SessionEvent::KeyboardFlags(_) | SessionEvent::Size(..) | SessionEvent::PaneSize(..)) | None => {}
         }
         if String::from_utf8_lossy(&seen).contains("shepherd-42") {
             return;

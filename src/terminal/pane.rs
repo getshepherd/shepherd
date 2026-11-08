@@ -1108,6 +1108,14 @@ async fn pump(this: WeakEntity<PaneTerminal>, mut rx: UnboundedReceiver<SessionE
                         pane.fixed = Some((cols, rows));
                         pane.emulator.resize(cols, rows)
                     }
+                    // given back at the size the pane last asked for, which the pane may have outgrown: the next
+                    // layout resizes the grid to the pane and tells the backend. An echo of the pane's own resize
+                    // changes nothing.
+                    SessionEvent::PaneSize(cols, rows) => {
+                        if pane.fixed.take().is_some() {
+                            pane.emulator.resize(cols, rows);
+                        }
+                    }
                     SessionEvent::Ended(why) => {
                         pane.ended = Some(why);
                         pane.session = None;

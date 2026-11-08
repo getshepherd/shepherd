@@ -259,7 +259,7 @@ fn attach(server: &Endpoint, pane: &str, cols: u16, rows: u16, cell_px: (u32, u3
     let nonce = nonce(&welcome).ok_or_else(|| anyhow!("Rex refused the stream: {welcome:?}"))?;
 
     let (tx, rx) = unbounded();
-    std::thread::Builder::new().name("rex-stream".into()).spawn(move || read_stream(stream, nonce, tx))?;
+    std::thread::Builder::new().name("rex-stream".into()).spawn(move || read_stream(stream, nonce, observe, tx))?;
     let (commands, heard) = mpsc::channel();
     std::thread::Builder::new().name("rex-input".into()).spawn(move || {
         for command in heard {
@@ -292,8 +292,46 @@ fn snapshot_end(head: &[u8], searched: usize, nonce: u64) -> Option<usize> {
     head[from..].windows(mark.len()).position(|w| w == mark.as_bytes()).map(|at| from + at)
 }
 
-fn read_stream(mut stream: ws::Receiver, nonce: u64, tx: UnboundedSender<SessionEvent>) {
+/// Whose size the terminal has, from Rex's `resize` messages in its stream: the block follows its owner, so while
+/// another client owns it (a click in Rex.app takes it) the frames are that client's size, and the pane shows them at
+/// it. A pane that controls the block took it before the stream began, so the first message's owner is this pane.
+#[derive(Default)]
+struct Sizing {
+    observe: bool,
+    ours: Option<String>,
+}
+
+impl Sizing {
+    /// What the last `resize` message in `bytes` says, if one is there.
+    // ponytail: Rex sends each message as a frame of its own; one split across frames would be missed
+    fn read(&mut self, bytes: &[u8], nonce: u64) -> Option<SessionEvent> {
+        let mark = format!("\x1b_rex1;{nonce};");
+        let mut said = None;
+        let mut rest = bytes;
+        while let Some(at) = rest.windows(mark.len()).position(|w| w == mark.as_bytes()) {
+            rest = &rest[at + mark.len()..];
+            let Some(end) = rest.windows(2).position(|w| w == b"\x1b\\") else { break };
+            let message: Value = serde_json::from_slice(&rest[..end]).unwrap_or_default();
+            rest = &rest[end..];
+            if message["type"] != "resize" {
+                continue;
+            }
+            let (Some(cols), Some(rows)) = (message["cols"].as_u64(), message["rows"].as_u64()) else { continue };
+            let owner = message["owner"].as_str().map(str::to_string);
+            if !self.observe && self.ours.is_none() {
+                self.ours = owner.clone();
+            }
+            // no owner: a resize of the pane's applies at once
+            let pane_sized = !self.observe && (owner.is_none() || owner == self.ours);
+            said = Some(if pane_sized { SessionEvent::PaneSize(cols as u16, rows as u16) } else { SessionEvent::Size(cols as u16, rows as u16) });
+        }
+        said
+    }
+}
+
+fn read_stream(mut stream: ws::Receiver, nonce: u64, observe: bool, tx: UnboundedSender<SessionEvent>) {
     let mut head = Some(Vec::new());
+    let mut sizing = Sizing { observe, ..Sizing::default() };
     loop {
         let bytes = match stream.next() {
             Ok(bytes) => bytes,
@@ -303,6 +341,9 @@ fn read_stream(mut stream: ws::Receiver, nonce: u64, tx: UnboundedSender<Session
             }
         };
         let Some(buffer) = head.as_mut() else {
+            if let Some(size) = sizing.read(&bytes, nonce) {
+                let _ = tx.unbounded_send(size);
+            }
             let _ = tx.unbounded_send(SessionEvent::Frame(bytes));
             continue;
         };
@@ -311,6 +352,9 @@ fn read_stream(mut stream: ws::Receiver, nonce: u64, tx: UnboundedSender<Session
         if let Some(end) = snapshot_end(buffer, searched, nonce) {
             let rest = buffer.split_off(end);
             let _ = tx.unbounded_send(SessionEvent::Snapshot(head.take().unwrap_or_default()));
+            if let Some(size) = sizing.read(&rest, nonce) {
+                let _ = tx.unbounded_send(size);
+            }
             let _ = tx.unbounded_send(SessionEvent::Frame(rest));
         }
     }
@@ -329,6 +373,20 @@ mod tests {
         assert_eq!(Endpoint::parse("build.tail.ts.net").unwrap(), [net("build.tail.ts.net", 443, true), net("build.tail.ts.net", 7297, true), net("build.tail.ts.net", 7297, false)]);
         assert!(Endpoint::parse("https://root@build.tail.ts.net").is_err(), "an account is refused, not dropped");
         assert!(Endpoint::parse("ssh://build").is_err());
+    }
+
+    #[test]
+    fn the_terminal_has_its_owners_size() {
+        let said = |owner: &str, cols: u16| format!("\x1b_rex1;7;{{\"type\":\"resize\",\"cols\":{cols},\"rows\":30{owner}}}\x1b\\");
+        let (me, rexapp) = (",\"owner\":\"client:me\"", ",\"owner\":\"client:app\"");
+        let mut sizing = Sizing::default();
+        assert!(matches!(sizing.read(said(me, 80).as_bytes(), 7), Some(SessionEvent::PaneSize(80, 30))), "the first owner is this pane");
+        assert!(matches!(sizing.read(format!("$ {}ls", said(rexapp, 100)).as_bytes(), 7), Some(SessionEvent::Size(100, 30))));
+        assert!(sizing.read(b"\x1b_rex1;9;{\"type\":\"resize\",\"cols\":1,\"rows\":1}\x1b\\", 7).is_none(), "another nonce is a program's");
+        assert!(matches!(sizing.read(said(me, 80).as_bytes(), 7), Some(SessionEvent::PaneSize(80, 30))), "given back");
+        assert!(matches!(sizing.read(said("", 80).as_bytes(), 7), Some(SessionEvent::PaneSize(80, 30))), "no owner");
+        let mut observing = Sizing { observe: true, ..Sizing::default() };
+        assert!(matches!(observing.read(said(me, 80).as_bytes(), 7), Some(SessionEvent::Size(80, 30))), "an observer follows whoever owns it");
     }
 
     #[test]

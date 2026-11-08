@@ -158,8 +158,12 @@ pub enum SessionEvent {
     MouseCapture(bool),
     /// The kitty keyboard flags the pane's app asked for (herdr's socket sessions only).
     KeyboardFlags(u16),
-    /// The backend decides the terminal's size, whatever room the pane has (tmux): the frames that follow are this size.
+    /// The backend decides the terminal's size, whatever room the pane has (tmux; Rex while another client owns the
+    /// block): the frames that follow are this size.
     Size(u16, u16),
+    /// The terminal is this size, and the pane's room sizes it again after a [`Self::Size`] (Rex: the block is the
+    /// pane's once more).
+    PaneSize(u16, u16),
     /// The stream is over: the backend's reason, its stderr, or why it could not run.
     Ended(String),
 }
