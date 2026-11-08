@@ -1,6 +1,7 @@
 // ponytail: GPUI code passes callbacks, tuples of fn tables and render state around by hand; Zed allows these too.
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
+pub mod agent_skill;
 pub mod agents;
 pub mod analytics;
 pub mod annotations;
