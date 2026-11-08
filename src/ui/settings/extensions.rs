@@ -1,5 +1,5 @@
 //! Settings → Extensions, above the pages added by hand: the extensions installed (`crate::extensions`), whether each
-//! runs always or with Shepherd, removing one, their folder, and installing one from a GitHub release.
+//! runs always or with Shepherd, starting and stopping its server, removing one, their folder, and installing one from a GitHub release.
 use super::*;
 use crate::extensions::{self as ext, Extension, Extensions, Release};
 
@@ -64,6 +64,19 @@ impl SettingsView {
         );
     }
 
+    /// Starts (`up`) or stops its server, Shepherd's own `serve` or the system's service.
+    fn power(&mut self, e: Extension, up: bool, cx: &mut Context<Self>) {
+        (self.ext_busy, self.ext_note) = (Some((e.name.clone(), if up { "Starting…" } else { "Stopping…" })), None);
+        self.ext_job(
+            move || if up { ext::start_server(&e) } else { ext::stop_server(&e) },
+            |v, result| {
+                v.ext_busy = None;
+                v.ext_note = result.err();
+            },
+            cx,
+        );
+    }
+
     fn remove_extension(&mut self, e: Extension, cx: &mut Context<Self>) {
         (self.ext_busy, self.ext_remove, self.ext_note) = (Some((e.name.clone(), "Removing…")), None, None);
         self.ext_job(
@@ -106,7 +119,7 @@ impl SettingsView {
     }
 
     /// One installed extension's row: its name with a dot that says whether it answers, its description, when it
-    /// runs as a select, and the bin; or, once the bin is pressed, the question whether to remove it.
+    /// runs as a select, Start or Stop, and the bin; or, once the bin is pressed, the question whether to remove it.
     fn extension_row(&self, i: usize, e: Extension, theme: &Theme, cx: &mut Context<Self>) -> Div {
         if self.ext_remove.as_ref() == Some(&e.name) {
             return card_row(theme, i == 0)
@@ -157,6 +170,12 @@ impl SettingsView {
         };
         let labels = STARTS.iter().map(|(_, label)| SharedString::from(*label)).collect();
         let runs = self.select(theme, web_select_id("ext-start", &e.name), labels, current, e.start.clone().into(), |_| None, pick, cx);
+        let power = {
+            let (label, up) = if e.alive { ("Stop", false) } else { ("Start", true) };
+            let e = e.clone();
+            action(theme, web_select_id("ext-power", &e.name), label)
+                .when(busy.is_none(), |el| el.on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.power(e.clone(), up, cx))))
+        };
         let name = e.name.clone();
         let remove = remove_button(theme, format!("ext-remove-{name}")).mt(px(0.)).when(busy.is_none(), |el| {
             el.on_click(cx.listener(move |v, _: &ClickEvent, _, cx| {
@@ -164,7 +183,7 @@ impl SettingsView {
                 cx.notify();
             }))
         });
-        card_row(theme, i == 0).child(text).child(runs.w(px(208.))).child(remove)
+        card_row(theme, i == 0).child(text).child(power).child(runs.w(px(208.))).child(remove)
     }
 
     /// Install from GitHub's card: the repo and Install, or the question whether to run the build found.

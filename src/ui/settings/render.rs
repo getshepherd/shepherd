@@ -134,7 +134,7 @@ impl Render for SettingsView {
                             |_, _: &ClickEvent, _, cx| update(cx, |s| s.secure_input = !s.secure_input),
                         )),
                     )),
-            ),
+            ).child(self.links(&theme, cx)),
             Section::Terminal => div()
                 .child(page_header(&theme, "Terminal", "The font every pane draws with."))
                 .child(

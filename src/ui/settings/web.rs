@@ -67,10 +67,10 @@ impl SettingsView {
 
     /// The pages added by hand, Zeron's way: each page a block of labelled fields on a two-column grid
     /// (name and URL, where it is listed and where it opens) with a red bin to remove it, "Add page" by the section's
-    /// label, and the switch for links to other sites.
+    /// label.
     pub(super) fn web_pages(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let settings = &SettingsGlobal::of(cx).settings;
-        let (entries, outside, inside) = (settings.web_entries.clone(), settings.web_links_outside, settings.web_links_inside);
+        let entries = settings.web_entries.clone();
         let muted = theme.text_muted;
         let labelled = |label: &'static str, control: Div| labelled(theme, label, control);
         let pair = |left: Div, right: Div| div().flex().gap(px(12.)).child(left).child(right);
@@ -155,15 +155,23 @@ impl SettingsView {
                     )))
                 }),
             )
-            .child(
-                card(theme).mt(px(12.)).child(
-                    toggle_row(theme, true, "web-links-outside", "Open links to other sites in the browser", "Off: they open in the page, inside Shepherd.", outside)
+    }
+
+    /// General's Links: where a link opens, from a page or from a terminal.
+    pub(super) fn links(&self, theme: &Theme, cx: &App) -> Div {
+        let settings = &SettingsGlobal::of(cx).settings;
+        let (outside, inside) = (settings.web_links_outside, settings.web_links_inside);
+        div().child(section_label(theme, "Links")).child(
+            card(theme)
+                .mt_0()
+                .child(
+                    toggle_row(theme, true, "web-links-outside", "Open links to other sites in the browser", "From a page in the sidebar. Off: they open in the page, inside Shepherd.", outside)
                         .on_click(|_, _, cx| update(cx, |s| s.web_links_outside = !s.web_links_outside)),
                 )
                 .child(
                     toggle_row(theme, false, "web-links-inside", "Open terminal links in a browser tab", "Cmd+click on a web link opens it beside the terminal. Off: the system browser.", inside)
                         .on_click(|_, _, cx| update(cx, |s| s.web_links_inside = !s.web_links_inside)),
                 ),
-            )
+        )
     }
 }
