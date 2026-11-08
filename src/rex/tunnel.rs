@@ -109,7 +109,8 @@ mod tests {
 
     #[test]
     fn nothing_listening_is_an_error() {
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port(); // freed again
-        assert!(open("127.0.0.1", port, false).is_err());
+        // a port freed again, which a test running beside it may take before the connect: a few, so one is free
+        let freed = || std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert!((0..5).any(|_| open("127.0.0.1", freed(), false).is_err()));
     }
 }
