@@ -101,6 +101,16 @@ impl Host {
     }
 }
 
+/// `rex hosts add`: a host called `label`, reached at `endpoint`, as `rex hosts` then lists it.
+pub fn add_host(label: &str, endpoint: &str) -> anyhow::Result<Host> {
+    let binary = binary().context("Rex isn't installed")?;
+    let out = crate::process::command(binary).args(["hosts", "add", label, endpoint]).output().context("rex hosts add")?;
+    if !out.status.success() {
+        bail!("rex hosts add: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    hosts()?.into_iter().find(|h| h.label.eq_ignore_ascii_case(label)).context("rex hosts add: the new host isn't listed")
+}
+
 /// `rex hosts remove`: the host is forgotten; its server runs on there.
 pub fn remove_host(label: &str) -> anyhow::Result<()> {
     let binary = binary().context("Rex isn't installed")?;

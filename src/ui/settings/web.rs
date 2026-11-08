@@ -1,4 +1,5 @@
-//! Settings → Web pages: an editable row per page, saved on Enter or when a field is left.
+//! Settings → Extensions' pages added by hand, under the extensions: an editable row per page, saved on Enter or when a
+//! field is left. Their settings keep the name they had (`web_entries`, `web_links_*`), so settings.json still reads.
 use super::*;
 use crate::backend::Kind;
 
@@ -64,12 +65,12 @@ impl SettingsView {
         }
     }
 
-    /// Settings → Web pages, Zeron's way: each page a block of labelled fields on a two-column grid
+    /// The pages added by hand, Zeron's way: each page a block of labelled fields on a two-column grid
     /// (name and URL, where it is listed and where it opens) with a red bin to remove it, "Add page" by the section's
-    /// label, and the switch for links to other sites.
+    /// label.
     pub(super) fn web_pages(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let settings = &SettingsGlobal::of(cx).settings;
-        let (entries, outside, inside) = (settings.web_entries.clone(), settings.web_links_outside, settings.web_links_inside);
+        let entries = settings.web_entries.clone();
         let muted = theme.text_muted;
         let labelled = |label: &'static str, control: Div| labelled(theme, label, control);
         let pair = |left: Div, right: Div| div().flex().gap(px(12.)).child(left).child(right);
@@ -137,7 +138,7 @@ impl SettingsView {
                     .pl(px(8.))
                     .flex()
                     .items_center()
-                    .child(div().flex_1().text_color(muted).child("Pages"))
+                    .child(div().flex_1().text_color(muted).child("Web pages"))
                     .child(
                         action(theme, "web-add", "Add page")
                             .gap(px(6.))
@@ -150,19 +151,27 @@ impl SettingsView {
                     el.child(card_row(theme, true).child(row_text(
                         theme,
                         "No web pages yet",
-                        "Add one with its URL: a dev server, a dashboard, a tool on a machine.",
+                        "Any URL as a page of its own: a dev server, a dashboard, a tool on a machine.",
                     )))
                 }),
             )
-            .child(
-                card(theme).mt(px(12.)).child(
-                    toggle_row(theme, true, "web-links-outside", "Open links to other sites in the browser", "Off: they open in the page, inside Shepherd.", outside)
+    }
+
+    /// General's Links: where a link opens, from a page or from a terminal.
+    pub(super) fn links(&self, theme: &Theme, cx: &App) -> Div {
+        let settings = &SettingsGlobal::of(cx).settings;
+        let (outside, inside) = (settings.web_links_outside, settings.web_links_inside);
+        div().child(section_label(theme, "Links")).child(
+            card(theme)
+                .mt_0()
+                .child(
+                    toggle_row(theme, true, "web-links-outside", "Open links to other sites in the browser", "From a page in the sidebar. Off: they open in the page, inside Shepherd.", outside)
                         .on_click(|_, _, cx| update(cx, |s| s.web_links_outside = !s.web_links_outside)),
                 )
                 .child(
                     toggle_row(theme, false, "web-links-inside", "Open terminal links in a browser tab", "Cmd+click on a web link opens it beside the terminal. Off: the system browser.", inside)
                         .on_click(|_, _, cx| update(cx, |s| s.web_links_inside = !s.web_links_inside)),
                 ),
-            )
+        )
     }
 }

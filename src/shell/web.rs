@@ -18,6 +18,16 @@ pub(super) fn embeds_pages(window: &Window) -> bool {
     !matches!(HasWindowHandle::window_handle(window).map(|h| h.as_raw()), Ok(RawWindowHandle::Wayland(_)))
 }
 
+/// A page's address. Use this, not `WebView::url`: wry's macOS one unwraps WKWebView's `URL`, which is nil until a
+/// load commits, so a page whose first load failed (a port nothing listens on) took the app down on its next frame.
+pub(super) fn page_url(view: &wry::WebView) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    if !host::has_url(view) {
+        return None;
+    }
+    view.url().ok()
+}
+
 /// The window a page goes in, as wry takes it: GPUI's X11 window hands an XCB handle, and WebKitGTK's wry takes only an
 /// Xlib one; both name the same X window.
 #[cfg(target_os = "linux")]
@@ -152,7 +162,7 @@ impl Shell {
 
     /// The entries the sidebar lists for the place with key `place`.
     fn entries_in(&self, place: Option<&str>, cx: &App) -> Vec<WebEntry> {
-        listed(&SettingsGlobal::of(cx).settings.web_entries, self.backend.kind(), place).into_iter().cloned().collect()
+        listed(&sidebar_entries(cx), self.backend.kind(), place).into_iter().cloned().collect()
     }
 
     /// Fetches the favicons of the entries listed that have none yet, or whose URL changed.
@@ -280,6 +290,10 @@ impl Shell {
 
     /// The entry clicked in the sidebar: its page shown (made on first show).
     pub(super) fn show_web(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        // an extension whose server doesn't answer is started, and its page loaded again once it does
+        if let Some(ext) = crate::extensions::by_page(cx, &id).filter(|e| !e.alive) {
+            self.extension_server(ext.clone(), true, cx);
+        }
         if self.ensure_page(&id, window, cx) {
             self.pages.shown = Some(id);
             cx.notify();
@@ -289,7 +303,7 @@ impl Shell {
     /// Entry `id`'s page, made if it isn't yet; false when it can't be, a toast saying why, or on Wayland, where a web
     /// view can't sit in Shepherd's window, with its URL in the browser.
     pub(super) fn ensure_page(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let entries = SettingsGlobal::of(cx).settings.web_entries.iter().cloned().chain(self.panel_entries(cx));
+        let entries = sidebar_entries(cx).into_iter().chain(self.panel_entries(cx));
         let Some(entry) = entries.into_iter().find(|e| e.id == id) else { return false };
         let url = normalize(&entry.url);
         if !embeds_pages(window) {
@@ -399,6 +413,8 @@ impl Shell {
     /// forward's for a page on a machine, and the site its links are measured against.
     fn make_page(&mut self, key: PageKey, entry_url: &str, url: &str, window: &Window, cx: &mut Context<Self>) -> wry::Result<Page> {
         let events = self.page_events(window, cx);
+        // an extension's page wears Shepherd's theme from its first paint
+        let dressed = crate::extensions::by_page(cx, &key.0).map(|ext| crate::extensions::theme_script(Theme::of(cx), &ext.origin()));
         let browser = browser::is_tab(&key.0);
         let device = self.device_page_session(&key.0);
         self.pages.made += 1;
@@ -429,6 +445,10 @@ impl Shell {
         let builder = match device {
             Some((session, feed)) => super::device::three::attach(builder, session, feed, self.rt.clone(), move || ready(PageEvent::Ready)),
             None => new_tabs(builder, tab),
+        };
+        let builder = match dressed {
+            Some(script) => builder.with_initialization_script(script),
+            None => builder,
         };
         #[cfg(target_os = "linux")]
         let parent = Parent(window);
@@ -609,7 +629,7 @@ impl Shell {
         }
         self.fetch_favicons(cx);
         self.sync_browser(window, cx);
-        let mut entries = SettingsGlobal::of(cx).settings.web_entries.clone();
+        let mut entries = sidebar_entries(cx);
         entries.extend(self.panel_entries(cx));
         // a page on a machine also goes when its entry no longer opens there
         let still_opened = |id: &String, machine: &Option<String>| {
@@ -865,6 +885,36 @@ impl Shell {
             })
     }
 
+    /// Starts (`up`) or stops the extension's server off the main thread; once started, its page is loaded again.
+    /// What failed is a toast.
+    fn extension_server(&mut self, ext: crate::extensions::Extension, up: bool, cx: &mut Context<Self>) {
+        let key = self.page_key(&ext.entry());
+        let task = cx.background_spawn(async move {
+            if up { crate::extensions::start_server(&ext) } else { crate::extensions::stop_server(&ext) }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(()) if up => this.reload_page(&key),
+                    Ok(()) => {}
+                    Err(why) => crate::ui::toast::error(cx, why),
+                }
+                crate::extensions::refresh(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// The extensions' open pages put on the theme now in force, without a reload.
+    pub(super) fn restyle_extension_pages(&self, cx: &App) {
+        for ((id, _), page) in &self.pages.live {
+            if let Some(ext) = crate::extensions::by_page(cx, id) {
+                let _ = page.view.evaluate_script(&crate::extensions::theme_script(Theme::of(cx), &ext.origin()));
+            }
+        }
+    }
+
     /// Reloads page `key`, its spinner shown at once.
     pub(super) fn reload_page(&mut self, key: &PageKey) {
         if let Some(page) = self.pages.live.get_mut(key) {
@@ -897,7 +947,7 @@ impl Shell {
     /// Without a page shown, the shown pull request's link.
     pub(super) fn copy_page_url(&mut self, window: &Window, cx: &mut Context<Self>) {
         let Some((key, entry)) = self.visible_entry(window, cx) else { return self.copy_review(true, window, cx) };
-        let now = self.pages.live.get(&key).filter(|_| key.1.is_none()).and_then(|p| p.view.url().ok());
+        let now = self.pages.live.get(&key).filter(|_| key.1.is_none()).and_then(|p| page_url(&p.view));
         let url = now.unwrap_or_else(|| normalize(&entry.url));
         // an empty browser tab has nothing to copy
         if url == "about:blank" {
@@ -911,7 +961,9 @@ impl Shell {
     pub(super) fn web_menu(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let menu = self.web_menu.as_ref()?;
         let (id, at) = menu.value.clone();
-        let entry = SettingsGlobal::of(cx).settings.web_entries.iter().find(|e| e.id == id).cloned()?;
+        let entry = sidebar_entries(cx).into_iter().find(|e| e.id == id)?;
+        // an extension's page is the extension's: removed with it, not here
+        let extension = crate::extensions::by_page(cx, &id).cloned();
         let url = normalize(&entry.url);
         let key = self.page_key(&entry);
         let loaded = self.pages.live.contains_key(&key);
@@ -928,6 +980,11 @@ impl Shell {
                 }),
             )
         };
+        let server = extension.clone().map(|ext| {
+            let (label, up) = if ext.alive { ("Stop Server", false) } else { ("Start Server", true) };
+            item("web-menu-server", label, Box::new(move |this, _, cx| this.extension_server(ext.clone(), up, cx)))
+        });
+        let extension = extension.is_some();
         let (copied, removed) = (url.clone(), id.clone());
         let card = menu_card(theme, "web-menu", 160.)
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -950,9 +1007,10 @@ impl Shell {
                 "Copy URL",
                 Box::new(move |_, _, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string(copied.clone()))),
             ))
+            .children(server)
             .child(item("web-menu-edit", "Edit…", Box::new(|this, window, cx| this.open_web_settings(window, cx))))
-            .child(div().mx(px(-4.)).my(px(4.)).h(px(1.)).bg(theme.border))
-            .child(
+            .when(!extension, |el| el.child(div().mx(px(-4.)).my(px(4.)).h(px(1.)).bg(theme.border)))
+            .when(!extension, |el| el.child(
                 item(
                     "web-menu-remove",
                     "Remove",
@@ -962,7 +1020,7 @@ impl Shell {
                     }),
                 )
                 .text_color(theme.danger),
-            );
+            ));
         let menu = crate::ui::menu_motion("web-menu-in", menu, card);
         Some(
             gpui::deferred(gpui::anchored().position(at).snap_to_window_with_margin(px(8.)).child(menu))
@@ -1039,6 +1097,13 @@ impl Shell {
                 .child(div().mt(px(8.)).mx(px(8.)).h(px(1.)).bg(theme.border)),
         )
     }
+}
+
+/// The sidebar's pages: the extensions' first, then those added in Settings.
+fn sidebar_entries(cx: &App) -> Vec<WebEntry> {
+    let mut entries = crate::extensions::entries(cx);
+    entries.extend(SettingsGlobal::of(cx).settings.web_entries.iter().cloned());
+    entries
 }
 
 /// Tells the page's IPC of a link ⌘-clicked (Ctrl off macOS) or middle-clicked that the page itself left alone, and
@@ -1128,6 +1193,13 @@ mod host {
     pub(super) fn loading(view: &wry::WebView) -> bool {
         // SAFETY: `isLoading` on a live WKWebView, on the main thread
         unsafe { msg_send![&*view.webview(), isLoading] }
+    }
+
+    /// Whether WKWebView has an address yet (its `URL` is nil before a load commits).
+    pub(super) fn has_url(view: &wry::WebView) -> bool {
+        // SAFETY: `URL` on a live WKWebView, on the main thread
+        let url: Option<Retained<AnyObject>> = unsafe { msg_send![&*view.webview(), URL] };
+        url.is_some()
     }
 
     /// The page's view, and the key (and click) monitor that takes Shepherd's shortcuts from the page while it has the keyboard

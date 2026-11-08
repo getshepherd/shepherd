@@ -84,6 +84,12 @@ pub struct Theme {
     /// The window lets the desktop through (the settings' Translucent window): its fill is `glass`.
     pub translucent: bool,
     pub terminal: TerminalPalette,
+    /// The variant's colors Shepherd's own UI doesn't use, for what does: extensions' pages (`crate::extensions::theme_script`).
+    pub background: Hsla,
+    pub raised: Hsla,
+    pub dialog: Hsla,
+    pub input: Hsla,
+    pub on_accent: Hsla,
 }
 
 impl Global for Theme {}
@@ -280,6 +286,11 @@ impl Theme {
                 selection: color(v.accent.primary).opacity(if v.appearance.is_dark() { 0.30 } else { 0.20 }),
                 ansi: v.terminal.ansi.map(color),
             },
+            background: color(c.background),
+            raised: color(c.raised),
+            dialog: color(c.dialog),
+            input: color(c.input),
+            on_accent: color(v.accent.on),
         }
     }
 

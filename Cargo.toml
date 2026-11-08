@@ -1,11 +1,11 @@
 [package]
 name = "shepherd"
-version = "1.7.1"
+version = "1.7.2"
 edition = "2024"
 publish = false
 description = "A native window for herdr: workspaces, tabs, panes and every coding agent at a glance"
 license = "MIT"
-repository = "https://github.com/freethinkel/shepherd"
+repository = "https://github.com/getshepherd/shepherd"
 
 # A monorepo: the app at the root, its own crates under packages/.
 [workspace]
@@ -32,6 +32,10 @@ bincode = { version = "2", features = ["serde"] }
 tiny-skia = "0.11"
 tokio = { version = "1", features = ["full"] }
 ureq = "3.4.2"
+# an extension downloaded from GitHub waits in a folder of its own until it installs itself (src/extensions.rs)
+tempfile = "3"
+# checks a release archive's Ed25519 signature off macOS (src/update.rs); already built for rustls
+ring = "0.17"
 # a Rex host's HTTPS (src/rex/tunnel.rs), on the rustls and roots ureq already brings
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 webpki-roots = "1"
@@ -83,7 +87,6 @@ gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "18a89af04cfe079
 
 [dev-dependencies]
 gpui = { git = "https://github.com/zeronsh/zui", rev = "18a89af04cfe079d55275b111ac349d5640d9cda", features = ["test-support"] }
-tempfile = "3"
 
 # Linux packages, made by scripts/linux-dist.sh from the binary it builds. Vulkan is loaded at runtime, so the
 # shared-library scan misses it.

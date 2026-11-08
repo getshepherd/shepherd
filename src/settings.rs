@@ -438,17 +438,17 @@ pub(crate) fn home() -> PathBuf {
 
 /// Where the settings live: macOS's Application Support, Windows' roaming AppData, else the XDG config folder.
 #[cfg(target_os = "macos")]
-fn config_dir() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     home().join("Library/Application Support/Shepherd")
 }
 
 #[cfg(windows)]
-fn config_dir() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     std::env::var_os("APPDATA").map_or_else(|| home().join("AppData").join("Roaming"), PathBuf::from).join("Shepherd")
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
-fn config_dir() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME").map_or_else(|| home().join(".config"), PathBuf::from).join("shepherd")
 }
 

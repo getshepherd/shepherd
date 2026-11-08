@@ -262,7 +262,8 @@ impl Shell {
             let editing = live.then(|| self.rename_field(&rename_target, cx)).flatten();
             let (ws_id, label) = (w.workspace_id.clone(), w.label.clone());
             let dir = workspace_dir(w, snapshot);
-            let git = dir.as_deref().filter(|_| show.branch).and_then(|d| crate::ui::statusbar::git_of(d, cx));
+            // a compact row has no branch line, only the ↑↓ beside the name, which goes with Changes there
+            let git = dir.as_deref().filter(|_| if compact { show.changes } else { show.branch }).and_then(|d| crate::ui::statusbar::git_of(d, cx));
             // herdr's commits ahead of and behind the upstream, also on a compact row
             let sync = git.as_ref().filter(|g| g.ahead > 0 || g.behind > 0).map(|g| {
                 div()
@@ -942,11 +943,12 @@ impl Shell {
                         ),
                 )),
             )
-            .when(self.backend.herdr().is_some(), |bar| {
+            .when(self.backend.herdr().is_some() || self.backend.kind() == crate::backend::Kind::Rex, |bar| {
+                let rex = self.backend.kind() == crate::backend::Kind::Rex;
                 bar.child(
                     div()
                         .id("place-new")
-                        .tooltip(tip("New session", None))
+                        .tooltip(tip(if rex { "New host" } else { "New session" }, None))
                         .size(px(30.))
                         .flex_none()
                         .flex()

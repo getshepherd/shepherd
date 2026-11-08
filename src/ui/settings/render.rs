@@ -134,7 +134,7 @@ impl Render for SettingsView {
                             |_, _: &ClickEvent, _, cx| update(cx, |s| s.secure_input = !s.secure_input),
                         )),
                     )),
-            ),
+            ).child(self.links(&theme, cx)),
             Section::Terminal => div()
                 .child(page_header(&theme, "Terminal", "The font every pane draws with."))
                 .child(
@@ -392,12 +392,13 @@ impl Render for SettingsView {
                     )
                     .children(agents)
             }
-            Section::WebPages => div()
+            Section::Extensions => div()
                 .child(page_header(
                     &theme,
-                    "Web pages",
-                    "Local tools, listed in the sidebar above the workspaces and shown in place of the tabs and panes.",
+                    "Extensions",
+                    "Tools with a page in the sidebar, above the workspaces, and a CLI for agents; and web pages of your own.",
                 ))
+                .child(self.extensions(&theme, cx))
                 .child(self.web_pages(&theme, cx)),
             Section::Worktrees => self.worktrees_page(&theme, cx),
             Section::Backend => div()

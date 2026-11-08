@@ -1,4 +1,4 @@
-const repo = 'https://api.github.com/repos/freethinkel/shepherd'
+const repo = 'https://api.github.com/repos/getshepherd/shepherd'
 
 // The hero button offers this machine's build; the row's own button is the fallback link until the API answers.
 const ua = navigator.userAgent

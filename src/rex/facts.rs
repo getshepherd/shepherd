@@ -24,9 +24,9 @@ fn server(who: anyhow::Result<Value>) -> Fact {
                 (Some("running"), Some(name)) => format!("Tailscale: {name}"),
                 _ => "Tailscale off".to_string(),
             };
-            (format!("Rex {}", who["rex_version"].as_str().unwrap_or("")), format!("{} sessions · {tailscale}", who["session_count"].as_u64().unwrap_or(0)))
+            (format!("rex {}", who["rex_version"].as_str().unwrap_or("")), format!("{} sessions · {tailscale}", who["session_count"].as_u64().unwrap_or(0)))
         }
-        Err(e) => ("Rex".to_string(), format!("{e:#}")),
+        Err(e) => ("rex".to_string(), format!("{e:#}")),
     };
     Fact { title, detail, ..Default::default() }
 }
@@ -126,7 +126,7 @@ mod tests {
     fn the_server_says_its_version_sessions_and_tailnet() {
         let who = json!({"rex_version": "0.1", "session_count": 5, "tailscale": {"state": "running", "dns_name": "mac.ts.net"}});
         let fact = server(Ok(who));
-        assert_eq!((fact.title.as_str(), fact.detail.as_str()), ("Rex 0.1", "5 sessions · Tailscale: mac.ts.net"));
+        assert_eq!((fact.title.as_str(), fact.detail.as_str()), ("rex 0.1", "5 sessions · Tailscale: mac.ts.net"));
         assert_eq!(server(Ok(json!({"session_count": 1}))).detail, "1 sessions · Tailscale off");
     }
 
@@ -164,7 +164,7 @@ mod tests {
     fn live() {
         std::env::var("REX_SERVER").expect("run it on a server of its own");
         let facts = Kind::Rex.facts();
-        assert_eq!(facts.iter().map(|f| f.title.split(' ').next().unwrap()).collect::<Vec<_>>(), ["Rex", "Config", "Agent", "Terminfo", "Hosts"], "{facts:?}");
+        assert_eq!(facts.iter().map(|f| f.title.split(' ').next().unwrap()).collect::<Vec<_>>(), ["rex", "Config", "Agent", "Terminfo", "Hosts"], "{facts:?}");
         assert!(facts[0].title.len() > 4 && facts[0].detail.contains("sessions"), "{facts:?}");
         assert!(facts[1].file.is_some(), "{facts:?}");
         Kind::Rex.run(RELOAD.args).unwrap();

@@ -62,6 +62,7 @@ fn main() {
         })
         .detach();
         shepherd::update::start(cx);
+        shepherd::extensions::start(cx);
         shepherd::ui::loader::drive_slow_frames(cx);
         shepherd::analytics::seen([]);
         shepherd::notify::warn_if_denied(cx);

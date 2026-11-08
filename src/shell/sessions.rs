@@ -199,6 +199,8 @@ pub(super) struct SessionDialog {
     /// The SSH host of a remote session; shown while `remote` is on.
     pub(super) host: Entity<InputState>,
     pub(super) remote: bool,
+    /// On Rex: a host (`rex hosts add`), its label and address, rather than a herdr session.
+    pub(super) rex: bool,
     /// Bumped on every flip of `remote`: the host field's slide restarts.
     pub(super) flips: u64,
     _events: Vec<Subscription>,
@@ -719,7 +721,9 @@ impl Shell {
                 input
             })
         };
-        let (name, host) = (field("Name", cx), field("user@host or a Host from ~/.ssh/config", cx));
+        let rex = self.backend.kind() == Kind::Rex;
+        let address = if rex { "host, https://host:port or unix:///path/to/rex.sock" } else { "user@host or a Host from ~/.ssh/config" };
+        let (name, host) = (field("Name", cx), field(address, cx));
         name.update(cx, |input, cx| input.focus(window, cx));
         let enter = |shell: &mut Shell, _: &Entity<InputState>, event: &InputEvent, _: &mut Window, cx: &mut Context<Shell>| {
             if let InputEvent::PressEnter { .. } = event {
@@ -727,7 +731,7 @@ impl Shell {
             }
         };
         let events = vec![cx.subscribe_in(&name, window, enter), cx.subscribe_in(&host, window, enter)];
-        self.session_dialog = Some(crate::ui::Popup::new(SessionDialog { name, host, remote: false, flips: 0, _events: events }));
+        self.session_dialog = Some(crate::ui::Popup::new(SessionDialog { name, host, remote: false, rex, flips: 0, _events: events }));
         cx.notify();
     }
 
@@ -747,6 +751,9 @@ impl Shell {
         let name = dialog.value.name.read(cx).value().trim().to_string();
         let host = dialog.value.host.read(cx).value().trim().to_string();
         let remote = dialog.value.remote;
+        if dialog.value.rex {
+            return self.finish_host_dialog(create, name, host, cx);
+        }
         // a remote session may go unnamed: the host's default one
         let name = if remote && name.is_empty() { "default".to_string() } else { name };
         if create && !crate::herdr::valid_session_name(&name) {
@@ -777,6 +784,37 @@ impl Shell {
                 _ => None,
             });
             self.switch_session(known.unwrap_or_else(|| crate::herdr::new_session(&name)), cx);
+        }
+        cx.notify();
+    }
+
+    /// Rex: add the host and move to it. A label or an address Rex would refuse keeps the dialog open.
+    fn finish_host_dialog(&mut self, create: bool, label: String, address: String, cx: &mut Context<Self>) {
+        if create && label.is_empty() {
+            crate::ui::toast::error(cx, "Name the host.");
+            return;
+        }
+        if create && crate::rex::Endpoint::parse(&address).is_err() {
+            crate::ui::toast::error(cx, "Where is it? A host, https://host:port, or unix:///path/to/rex.sock.");
+            return;
+        }
+        if let Some(dialog) = self.session_dialog.as_mut() {
+            dialog.close();
+        }
+        self.focused = None;
+        if create {
+            let task = cx.background_spawn(async move { crate::rex::add_host(&label, &address) });
+            cx.spawn(async move |this, cx| {
+                let added = task.await;
+                let _ = this.update(cx, |s, cx| match added {
+                    Ok(host) => {
+                        s.switch_to(Place::Rex(Some(host)), cx);
+                        s.refresh_places(cx);
+                    }
+                    Err(e) => crate::ui::toast::error(cx, format!("{e:#}")),
+                });
+            })
+            .detach();
         }
         cx.notify();
     }

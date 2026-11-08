@@ -74,7 +74,7 @@ fn annotation_theme(cx: &App) -> serde_json::Value {
 impl Page {
     /// Annotation needs a loaded page.
     pub(super) fn can_annotate(&self) -> bool {
-        self.view.url().is_ok_and(|url| !url.is_empty() && url != "about:blank")
+        super::web::page_url(&self.view).is_some_and(|url| !url.is_empty() && url != "about:blank")
     }
 }
 
