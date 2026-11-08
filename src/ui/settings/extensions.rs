@@ -1,5 +1,7 @@
-//! Settings → Extensions, above the pages added by hand: the extensions installed (`crate::extensions`), whether each
-//! runs always or with Shepherd, starting and stopping its server, removing one, their folder, and installing one from a GitHub release.
+//! Settings → Extensions, laid out as Zeron's Plugins: a tab of the extensions installed (`crate::extensions`), each
+//! a row with its version, an update, a switch that runs it, the bin and a dialog of its settings (whether it runs
+//! always or with Shepherd, its folder), and a tab of the pages added by hand; Install opens a dialog for a GitHub
+//! release.
 use super::*;
 use crate::extensions::{self as ext, Extension, Extensions, Release};
 
@@ -31,6 +33,47 @@ fn filled(id: &'static str, label: &'static str, bg: gpui::Hsla, fg: gpui::Hsla)
         .cursor_pointer()
         .hover(move |s| s.bg(bg.opacity(0.88)))
         .child(label)
+}
+
+/// Extensions' tabs.
+#[derive(Default, Clone, Copy, PartialEq)]
+pub(super) enum Tab {
+    #[default]
+    Installed,
+    Pages,
+}
+
+/// A dialog's card: Zeron's, 460 px, on the dialog surface.
+fn dialog_card(theme: &Theme, id: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .occlude()
+        .w(px(460.))
+        .p(px(24.))
+        .rounded(px(16.))
+        .bg(theme.dialog)
+        .border_1()
+        .border_color(theme.border)
+        .text_color(theme.text)
+        .text_size(px(13.))
+        .flex()
+        .flex_col()
+}
+
+/// `card` centered over the window on a 35 % scrim, both fading in and out with `popup`.
+fn modal<T>(name: &'static str, popup: &crate::ui::Popup<T>, card: Stateful<Div>, window: &Window) -> impl IntoElement + use<T> {
+    let viewport = window.viewport_size();
+    let scrim = div()
+        .id(SharedString::from(format!("{name}-scrim")))
+        .occlude()
+        .w(viewport.width)
+        .h(viewport.height)
+        .bg(gpui::black().opacity(0.35))
+        .flex()
+        .justify_center()
+        .items_center()
+        .child(crate::ui::dialog_motion(format!("{name}-in"), popup, div().id(SharedString::from(format!("{name}-motion"))).child(card), 2.));
+    gpui::deferred(gpui::anchored().position(gpui::point(px(0.), px(0.))).child(crate::ui::dialog_motion(format!("{name}-scrim-in"), popup, scrim, 0.))).with_priority(2)
 }
 
 /// The two ways an extension runs, as its state's `start` and the select's label.
@@ -152,82 +195,99 @@ impl SettingsView {
             move || ext::install(&release, "shepherd"),
             move |v, result| {
                 v.install = Install::Idle;
-                v.install_note = Some(result.map_or_else(|why| format!("{what} didn't install: {why}"), |()| format!("Installed {what}.")));
+                match result {
+                    Ok(()) => {
+                        v.ext_note = Some(format!("Installed {what}."));
+                        v.ext_tab = Tab::Installed;
+                        if let Some(d) = v.install_dialog.as_mut() {
+                            d.close()
+                        }
+                    }
+                    Err(why) => v.install_note = Some(format!("{what} didn't install: {why}")),
+                }
             },
             cx,
         );
     }
 
-    /// One installed extension's row: its name with a dot that says whether it answers, its description, when it
-    /// runs as a select, Start or Stop, and the bin; or, once the bin is pressed, the question whether to remove it.
+    /// Reads each extension's page icon the sidebar kept (`crate::web::Seen`), once a Settings: a small file each.
+    pub(super) fn load_ext_icons(&mut self, cx: &App) {
+        let seen = crate::web::Seen::default();
+        for e in cx.try_global::<Extensions>().map(|e| e.0.clone()).unwrap_or_default() {
+            self.ext_icons.entry(e.name.clone()).or_insert_with(|| {
+                let entry = e.entry();
+                seen.icon(&entry.id, &entry.url).map(|(format, bytes)| std::sync::Arc::new(gpui::Image::from_bytes(format, bytes)))
+            });
+        }
+    }
+
+    pub(super) fn open_install(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.install_dialog = Some(crate::ui::Popup::new(()));
+        if !matches!(self.install, Install::Installing) {
+            (self.install, self.install_note) = (Install::Idle, None);
+        }
+        self.ext_repo.update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    pub(super) fn close_install(&mut self, cx: &mut Context<Self>) {
+        if let Some(d) = self.install_dialog.as_mut() {
+            d.close()
+        }
+        if !matches!(self.install, Install::Installing) {
+            (self.install, self.install_note) = (Install::Idle, None);
+        }
+        cx.notify();
+    }
+
+    /// Its icon: the page's favicon as the sidebar kept it, else its initial on a tile.
+    fn ext_icon(&self, e: &Extension, theme: &Theme) -> Div {
+        let tile = div().flex_none().size(px(40.)).rounded(px(10.)).flex().items_center().justify_center();
+        match self.ext_icons.get(&e.name).cloned().flatten() {
+            Some(image) => tile.child(gpui::img(image).size(px(40.)).rounded(px(10.))),
+            None => tile
+                .bg(theme.accent.opacity(0.85))
+                .text_color(theme.on_accent)
+                .text_size(px(17.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(e.title().chars().next().map(String::from).unwrap_or_default()),
+        }
+    }
+
+    /// One installed extension, Zeron's plugin row: its icon; its name, where it came from and what it does; an
+    /// update when there is one, its version, its settings (a dialog), a switch that runs it, and the bin. Once the
+    /// bin is pressed, the row asks whether to remove it.
     fn extension_row(&self, i: usize, e: Extension, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let row = div().mx(px(16.)).py(px(14.)).when(i > 0, |el| el.border_t_1().border_color(theme.border.opacity(0.6)));
         if self.ext_remove.as_ref() == Some(&e.name) {
-            return card_row(theme, i == 0)
-                .child(row_text(
-                    theme,
-                    format!("Remove {}?", e.name),
-                    "Its service, its skill and its binary go. Its data stays in its folder, for when it is installed again.",
-                ))
-                .child(action(theme, "ext-remove-cancel", "Cancel").on_click(cx.listener(|v, _: &ClickEvent, _, cx| {
-                    v.ext_remove = None;
-                    cx.notify();
-                })))
-                .child(filled("ext-remove-yes", "Remove", theme.danger, gpui::white()).on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.remove_extension(e.clone(), cx))));
+            return row.flex().items_center().gap(px(14.)).child(self.ext_icon(&e, theme)).child(row_text(
+                theme,
+                format!("Remove {}?", e.title()),
+                "Its service, its skill and its binary go. Its data stays in its folder, for when it is installed again.",
+            ))
+            .child(action(theme, "ext-remove-cancel", "Cancel").on_click(cx.listener(|v, _: &ClickEvent, _, cx| {
+                v.ext_remove = None;
+                cx.notify();
+            })))
+            .child(filled("ext-remove-yes", "Remove", theme.danger, gpui::white()).on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.remove_extension(e.clone(), cx))));
         }
         let busy = self.ext_busy.as_ref().filter(|(name, _)| *name == e.name).map(|(_, doing)| *doing);
-        let (dot, state) = match busy {
-            Some(doing) => (theme.warning, doing),
-            None if e.alive => (theme.success, "Running"),
-            None => (theme.text_faint, "Not running"),
+        let from = match &e.source {
+            Some(s) => s.repo.clone(),
+            None => "Installed by hand".into(),
         };
-        let title = div()
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .child(div().font_weight(FontWeight::MEDIUM).line_height(px(17.)).child(e.name.clone()))
-            .child(div().flex_none().size(px(6.)).rounded_full().bg(dot))
-            .child(div().text_size(px(12.)).text_color(theme.text_muted).child(state))
-            // the release it was installed from
-            .children(e.source.as_ref().map(|s| div().text_size(px(12.)).text_color(theme.text_faint).child(s.tag.clone())));
+        let state = busy.or((!e.alive).then_some("Not running"));
         let description = if e.description.is_empty() { e.binary.display().to_string() } else { e.description.clone() };
+        let line = |text: String, color| div().text_size(px(12.5)).line_height(px(17.)).text_color(color).whitespace_nowrap().overflow_hidden().text_ellipsis().child(text);
         let text = div()
             .flex_1()
             .min_w_0()
             .flex()
             .flex_col()
-            .gap(px(4.))
-            .child(title)
-            .child(div().text_size(px(12.)).line_height(px(16.)).text_color(theme.text_muted).child(description));
-        let current = STARTS.iter().position(|(start, _)| *start == e.start);
-        let view = cx.entity().downgrade();
-        let pick = {
-            let e = e.clone();
-            move |i: usize, cx: &mut App| {
-                let start = STARTS[i].0;
-                if start != e.start && busy.is_none() {
-                    let (e, view) = (e.clone(), view.clone());
-                    // the select calls this while it updates the view: the switch waits until it is done
-                    cx.defer(move |cx| {
-                        let _ = view.update(cx, |v, cx| v.switch_start(e, start, cx));
-                    });
-                }
-            }
-        };
-        let labels = STARTS.iter().map(|(_, label)| SharedString::from(*label)).collect();
-        let runs = self.select(theme, web_select_id("ext-start", &e.name), labels, current, e.start.clone().into(), |_| None, pick, cx);
-        let power = {
-            let (label, up) = if e.alive { ("Stop", false) } else { ("Start", true) };
-            let e = e.clone();
-            action(theme, web_select_id("ext-power", &e.name), label)
-                .when(busy.is_none(), |el| el.on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.power(e.clone(), up, cx))))
-        };
-        let name = e.name.clone();
-        let remove = remove_button(theme, format!("ext-remove-{name}")).mt(px(0.)).when(busy.is_none(), |el| {
-            el.on_click(cx.listener(move |v, _: &ClickEvent, _, cx| {
-                v.ext_remove = Some(name.clone());
-                cx.notify();
-            }))
-        });
+            .gap(px(2.))
+            .child(div().font_weight(FontWeight::MEDIUM).line_height(px(18.)).child(e.title()))
+            .child(line(state.map_or(from.clone(), |s| format!("{from} · {s}")), theme.text_muted))
+            .child(line(description, theme.text_faint));
         let update = match self.ext_updates.as_ref().and_then(|u| u.get(&e.name)) {
             Some(Ok(Some(release))) if busy.is_none() => {
                 let (e, release) = (e.clone(), release.clone());
@@ -239,82 +299,271 @@ impl SettingsView {
             }
             _ => None,
         };
-        card_row(theme, i == 0).child(text).children(update).child(power).child(runs.w(px(208.))).child(remove)
-    }
-
-    /// Install from GitHub's card: the repo and Install, or the question whether to run the build found.
-    fn install_card(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let row = match &self.install {
-            Install::Confirm(release) => {
-                let release = release.clone();
-                card_row(theme, true)
-                    .child(row_text(
-                        theme,
-                        format!("Install {} {}?", release.repo, release.tag),
-                        format!("{} is downloaded and run on this computer, with your rights. Install only what you trust.", release.asset),
-                    ))
-                    .child(action(theme, "ext-install-cancel", "Cancel").on_click(cx.listener(|v, _: &ClickEvent, _, cx| {
-                        v.install = Install::Idle;
-                        cx.notify();
-                    })))
-                    .child(filled("ext-install-yes", "Install", theme.accent, theme.on_accent).on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.install_release(release.clone(), cx))))
-            }
-            install => {
-                let button = match install {
-                    Install::Finding => action(theme, "ext-install", "Looking…"),
-                    Install::Installing => action(theme, "ext-install", "Installing…"),
-                    _ => action(theme, "ext-install", "Install").on_click(cx.listener(|v, _: &ClickEvent, _, cx| v.find_release(cx))),
-                };
-                card_row(theme, true).min_h(px(0.)).child(field(theme, &self.ext_repo).flex_1()).child(button)
-            }
+        let version = e.source.as_ref().map(|s| {
+            div().flex_none().px(px(6.)).py(px(1.)).rounded(px(5.)).bg(theme.wash(0.06)).text_size(px(12.)).text_color(theme.text_muted).child(s.tag.clone())
+        });
+        let open = self.ext_settings.as_ref().is_some_and(|d| d.is_open() && d.value == e.name);
+        let icon_button = |id: &'static str, icon: &'static str, tone: gpui::Hsla, hover: gpui::Hsla| {
+            div()
+                .id(id)
+                .flex_none()
+                .size(px(30.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(8.))
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .child(gpui::svg().path(icon).size(px(16.)).text_color(tone))
         };
-        let hint = format!(
-            "A repo's latest release, its build for this computer (a file ending in {}). You confirm before it runs.",
-            ext::asset_suffix()
-        );
-        div().child(card(theme).mt(px(0.)).child(row)).child(note(theme, self.install_note.clone().unwrap_or(hint)))
+        let settings = {
+            let name = e.name.clone();
+            icon_button(web_select_id("ext-settings", &e.name), "icons/solar/tuning-2.svg", if open { theme.text } else { theme.text_muted }, theme.wash(0.08))
+                .when(open, |el| el.bg(theme.wash(0.08)))
+                .on_click(cx.listener(move |v, _: &ClickEvent, _, cx| {
+                    v.ext_settings = Some(crate::ui::Popup::new(name.clone()));
+                    cx.notify();
+                }))
+        };
+        let power = {
+            let (e, up) = (e.clone(), !e.alive);
+            div()
+                .id(web_select_id("ext-power", &e.name))
+                .flex_none()
+                .cursor_pointer()
+                .child(crate::ui::switch(theme, e.alive, format!("ext-power-{}", e.name)))
+                .when(busy.is_none(), |el| el.on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.power(e.clone(), up, cx))))
+        };
+        let remove = {
+            let name = e.name.clone();
+            icon_button(web_select_id("ext-remove", &e.name), "icons/solar/trash-bin-minimalistic.svg", theme.text_muted, theme.danger.opacity(0.12)).when(busy.is_none(), |el| {
+                el.on_click(cx.listener(move |v, _: &ClickEvent, _, cx| {
+                    v.ext_remove = Some(name.clone());
+                    cx.notify();
+                }))
+            })
+        };
+        let main = div()
+            .flex()
+            .items_center()
+            .gap(px(14.))
+            .child(self.ext_icon(&e, theme))
+            .child(text)
+            .child(div().flex_none().flex().items_center().gap(px(8.)).children(update).children(version).child(settings).child(power).child(remove));
+        row.child(main)
     }
 
-    /// The installed extensions with Open folder by their label, then installing one from GitHub.
-    pub(super) fn extensions(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let muted = theme.text_muted;
-        let list = cx.try_global::<Extensions>().map(|e| e.0.clone()).unwrap_or_default();
-        let empty = list.is_empty();
-        let rows: Vec<Div> = list.into_iter().enumerate().map(|(i, e)| self.extension_row(i, e, theme, cx)).collect();
-        // what the select's two choices mean, said once under the list
-        let runs = "While Shepherd is open: Shepherd starts it and stops it when it quits. Always: the system runs it from login, \
-             so its CLI works with Shepherd closed.";
-        div()
+    /// An extension's settings dialog: who it is, when it runs (each way with what it means), and its folder.
+    pub(super) fn settings_overlay(&self, popup: &crate::ui::Popup<String>, theme: &Theme, window: &Window, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let e = cx.try_global::<Extensions>()?.0.iter().find(|e| e.name == popup.value)?.clone();
+        let busy = self.ext_busy.as_ref().filter(|(name, _)| *name == e.name).map(|(_, doing)| *doing);
+        let from = e.source.as_ref().map_or("Installed by hand".to_string(), |s| format!("{} · {}", s.repo, s.tag));
+        let caption = |label: &'static str| div().mt(px(20.)).mb(px(8.)).text_size(px(12.)).text_color(theme.text_muted).child(label);
+        let meanings = ["Shepherd starts it, and stops it when it quits.", "The system runs it from login, so its CLI works with Shepherd closed."];
+        let options = STARTS.iter().zip(meanings).enumerate().map(|(i, ((start, label), meaning))| {
+            let (e, start) = (e.clone(), *start);
+            let chosen = e.start == start;
+            let hover = theme.wash(0.04);
+            div()
+                .id(web_select_id(&format!("ext-start-{start}"), &e.name))
+                .px(px(14.))
+                .py(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .when(i > 0, |el| el.border_t_1().border_color(theme.border.opacity(0.6)))
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .child(row_text(theme, *label, meaning))
+                .child(
+                    div()
+                        .flex_none()
+                        .size(px(16.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when(chosen, |el| el.child(gpui::svg().path("icons/check.svg").size(px(14.)).text_color(theme.accent))),
+                )
+                .when(busy.is_none() && !chosen, |el| el.on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.switch_start(e.clone(), start, cx))))
+        });
+        let folder = e.binary.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+        // as a person writes it: the home folder as ~
+        let home = crate::settings::home();
+        let path = folder.strip_prefix(&home).map_or_else(|_| folder.display().to_string(), |rest| format!("~/{}", rest.display()));
+        let card = dialog_card(theme, "ext-settings-dialog")
+            .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                if let Some(d) = v.ext_settings.as_mut() {
+                    d.close()
+                }
+                cx.notify();
+            }))
             .child(
                 div()
-                    .mt(px(32.))
-                    .mb(px(8.))
-                    .pl(px(8.))
                     .flex()
                     .items_center()
-                    .child(div().flex_1().text_color(muted).child("Installed"))
+                    .gap(px(14.))
+                    .child(self.ext_icon(&e, theme))
                     .child(
-                        action(theme, "ext-folder", "Open folder")
-                            .gap(px(6.))
-                            .child(gpui::svg().path("icons/solar/folder-open.svg").size(px(14.)).text_color(muted))
-                            .on_click(|_, _, cx| {
-                                let root = ext::root();
-                                match std::fs::create_dir_all(&root) {
-                                    Ok(()) => cx.open_with_system(&root),
-                                    Err(e) => crate::ui::toast::error(cx, format!("{}: {e}", root.display())),
-                                }
-                            }),
+                        div()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(div().text_size(px(17.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD).child(e.title()))
+                            .child(div().text_color(theme.text_muted).child(from)),
                     ),
             )
-            .child(card(theme).mt(px(0.)).children(rows).when(empty, |el| {
-                el.child(card_row(theme, true).child(row_text(
-                    theme,
-                    "No extensions yet",
-                    "Install one from GitHub below. Each is a page in the sidebar and a CLI for agents.",
-                )))
+            .child(caption("Runs"))
+            .child(div().rounded(px(10.)).bg(theme.wash(0.045)).overflow_hidden().flex().flex_col().children(options))
+            .children(busy.map(|doing| div().mt(px(6.)).text_size(px(12.)).text_color(theme.text_muted).child(doing)))
+            .child(caption("Folder"))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(div().flex_1().min_w_0().text_size(px(12.)).text_color(theme.text_muted).whitespace_nowrap().overflow_hidden().text_ellipsis().child(path))
+                    .child(
+                        action(theme, "ext-settings-folder", "Show in Finder")
+                            .gap(px(6.))
+                            .child(gpui::svg().path("icons/solar/folder-open.svg").size(px(14.)).text_color(theme.text_muted))
+                            .on_click(move |_, _, cx| cx.open_with_system(&folder)),
+                    ),
+            )
+            .child(
+                div().mt(px(24.)).flex().justify_end().child(filled("ext-settings-done", "Done", theme.accent, theme.on_accent).on_click(cx.listener(|v, _: &ClickEvent, _, cx| {
+                    if let Some(d) = v.ext_settings.as_mut() {
+                        d.close()
+                    }
+                    cx.notify();
+                }))),
+            );
+        Some(modal("ext-settings", popup, card, window))
+    }
+
+    /// The Install dialog over the window: a repo to look up, then the build found to confirm.
+    pub(super) fn install_overlay(&self, popup: &crate::ui::Popup<()>, theme: &Theme, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (title, body): (String, String) = match &self.install {
+            Install::Confirm(r) => (
+                format!("Install {} {}?", r.repo, r.tag),
+                format!("{} is downloaded and run on this computer, with your rights. Install only what you trust.", r.asset),
+            ),
+            _ => (
+                "Install an extension".into(),
+                format!(
+                    "Paste a GitHub repository, as owner/name or its link. Shepherd takes its latest release built for this computer \
+                     (a file ending in {}), and you confirm before it runs.",
+                    ext::asset_suffix()
+                ),
+            ),
+        };
+        let confirm = matches!(self.install, Install::Confirm(_));
+        let go = match &self.install {
+            Install::Finding => filled("ext-install-go", "Looking…", theme.accent.opacity(0.6), theme.on_accent),
+            Install::Installing => filled("ext-install-go", "Installing…", theme.accent.opacity(0.6), theme.on_accent),
+            Install::Confirm(r) => {
+                let r = r.clone();
+                filled("ext-install-go", "Install", theme.accent, theme.on_accent).on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.install_release(r.clone(), cx)))
+            }
+            Install::Idle => filled("ext-install-go", "Continue", theme.accent, theme.on_accent).on_click(cx.listener(|v, _: &ClickEvent, _, cx| v.find_release(cx))),
+        };
+        let card = dialog_card(theme, "install-dialog")
+            .gap(px(8.))
+            .on_mouse_down_out(cx.listener(|v, _, _, cx| v.close_install(cx)))
+            .child(div().text_size(px(17.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD).child(title))
+            .child(div().line_height(px(19.)).text_color(theme.text_muted).child(body))
+            .when(!confirm, |el| el.child(div().mt(px(12.)).child(labelled(theme, "Repository", field(theme, &self.ext_repo).w_full()))))
+            .children(self.install_note.clone().map(|n| div().text_size(px(12.)).line_height(px(16.)).text_color(theme.danger).child(n)))
+            .child(
+                div()
+                    .mt(px(16.))
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.))
+                    .child(action(theme, "ext-install-cancel", "Cancel").on_click(cx.listener(|v, _: &ClickEvent, _, cx| v.close_install(cx))))
+                    .child(go),
+            );
+        modal("install", popup, card, window)
+    }
+
+    /// Zeron's tab: its label and count, underlined when shown.
+    fn ext_tab(&self, theme: &Theme, tab: Tab, label: &'static str, count: usize, cx: &mut Context<Self>) -> Stateful<Div> {
+        let shown = self.ext_tab == tab;
+        div()
+            .id(label)
+            .mr(px(24.))
+            .pb(px(10.))
+            .mb(px(-1.))
+            .flex()
+            .items_center()
+            .gap(px(7.))
+            .border_b_2()
+            .border_color(if shown { theme.text } else { gpui::transparent_black() })
+            .cursor_pointer()
+            .child(div().when(shown, |el| el.font_weight(FontWeight::MEDIUM)).text_color(if shown { theme.text } else { theme.text_muted }).child(label))
+            .child(div().text_size(px(12.)).text_color(theme.text_faint).child(count.to_string()))
+            .on_click(cx.listener(move |v, _: &ClickEvent, _, cx| {
+                v.ext_tab = tab;
+                cx.notify();
             }))
-            .children(self.ext_note.clone().or_else(|| (!empty).then(|| runs.to_string())).map(|n| note(theme, n)))
-            .child(section_label(theme, "Install from GitHub"))
-            .child(self.install_card(theme, cx))
+    }
+
+    /// The tabs, Installed and Web pages, with the shown one's action at their right (Install, Add page), over its
+    /// card.
+    pub(super) fn extensions(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let list = cx.try_global::<Extensions>().map(|e| e.0.clone()).unwrap_or_default();
+        let pages = SettingsGlobal::of(cx).settings.web_entries.len();
+        let muted = theme.text_muted;
+        let (hover, text) = (theme.wash(0.06), theme.text);
+        let (label, icon) = match self.ext_tab {
+            Tab::Installed => ("Install", "icons/solar/download-minimalistic.svg"),
+            Tab::Pages => ("Add page", "icons/solar/add-circle.svg"),
+        };
+        let add = div()
+            .id("ext-add")
+            // its label level with the tabs'
+            .mb(px(8.))
+            .h(px(28.))
+            .px(px(8.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .rounded(px(7.))
+            .text_color(muted)
+            .cursor_pointer()
+            .hover(move |s| s.bg(hover).text_color(text))
+            .child(gpui::svg().path(icon).size(px(14.)).text_color(muted))
+            .child(label)
+            .on_click(cx.listener(|v, _: &ClickEvent, window, cx| match v.ext_tab {
+                Tab::Installed => v.open_install(window, cx),
+                Tab::Pages => update(cx, |s| s.web_entries.push(WebEntry::new())),
+            }));
+        let tabs = div()
+            .mt(px(28.))
+            .flex()
+            .items_end()
+            .border_b_1()
+            .border_color(theme.border.opacity(0.6))
+            .child(self.ext_tab(theme, Tab::Installed, "Installed", list.len(), cx))
+            .child(self.ext_tab(theme, Tab::Pages, "Web pages", pages, cx))
+            .child(div().flex_1())
+            .child(add);
+        let body = match self.ext_tab {
+            Tab::Pages => self.web_pages(theme, cx),
+            Tab::Installed => {
+                let empty = list.is_empty();
+                let rows: Vec<Div> = list.into_iter().enumerate().map(|(i, e)| self.extension_row(i, e, theme, cx)).collect();
+                div()
+                    .child(card(theme).mt(px(16.)).children(rows).when(empty, |el| {
+                        el.child(card_row(theme, true).child(row_text(
+                            theme,
+                            "No extensions yet",
+                            "Install one from GitHub: each is a page in the sidebar and a CLI for agents.",
+                        )))
+                    }))
+                    .children(self.ext_note.clone().map(|n| note(theme, n)))
+            }
+        };
+        div().child(tabs).child(body)
     }
 }

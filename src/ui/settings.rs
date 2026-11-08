@@ -174,6 +174,14 @@ pub struct SettingsView {
     /// What GitHub said of each extension installed from it, by name: the release to update to, none when it is up
     /// to date, or why it couldn't tell. `None` until Extensions is shown with extensions in it: asked once a Settings.
     ext_updates: Option<std::collections::HashMap<String, Result<Option<crate::extensions::Release>, String>>>,
+    /// Extensions' tab: the extensions installed, or the web pages added by hand.
+    ext_tab: extensions::Tab,
+    /// The Install dialog, up or playing its exit.
+    install_dialog: Option<crate::ui::Popup<()>>,
+    /// The settings dialog of an extension, by name (when it runs, its folder), up or playing its exit.
+    ext_settings: Option<crate::ui::Popup<String>>,
+    /// Each extension's page icon as the sidebar last kept it, by name: read once a Settings.
+    ext_icons: std::collections::HashMap<String, Option<std::sync::Arc<gpui::Image>>>,
     /// The web pages' name and URL fields, in the settings' order; made as entries come, dropped as they go.
     web_fields: Vec<WebFields>,
     /// The places a web page can be listed in, as (key, name), once herdr has listed them.
@@ -302,7 +310,7 @@ impl SettingsView {
             .collect();
 
         let select_search = field(None, "Search", window, cx);
-        let ext_repo = field(None, "owner/repo", window, cx);
+        let ext_repo = field(None, "github.com/owner/repo", window, cx);
         let mut subscriptions = vec![cx.subscribe(&ext_repo, |v: &mut Self, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) && matches!(v.install, extensions::Install::Idle) {
                 v.find_release(cx);
@@ -436,6 +444,10 @@ impl SettingsView {
             ext_remove: None,
             ext_note: None,
             ext_updates: None,
+            ext_tab: Default::default(),
+            install_dialog: None,
+            ext_settings: None,
+            ext_icons: Default::default(),
             web_fields: Vec::new(),
             places: None,
             backend: settings.backend,
