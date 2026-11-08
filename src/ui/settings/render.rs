@@ -6,6 +6,7 @@ impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::ui::reap_popup(&mut self.open_select, window);
         crate::ui::reap_popup(&mut self.install_dialog, window);
+        crate::ui::reap_popup(&mut self.ext_settings, window);
         self.sync_web_fields(window, cx);
         let theme = Theme::of(cx).clone();
         let global = SettingsGlobal::of(cx);
@@ -587,6 +588,11 @@ impl Render for SettingsView {
                         v.close_install(cx);
                         return;
                     }
+                    if let Some(d) = v.ext_settings.as_mut().filter(|d| d.is_open()) {
+                        d.close();
+                        cx.notify();
+                        return;
+                    }
                     cx.emit(Close);
                     return;
                 }
@@ -634,5 +640,6 @@ impl Render for SettingsView {
                 .child(crate::ui::scrollbar("settings-scrollbar", &self.body_scroll, &theme)),
             )
             .children(self.install_dialog.as_ref().map(|popup| self.install_overlay(popup, &theme, window, cx)))
+            .children(self.ext_settings.as_ref().and_then(|popup| self.settings_overlay(popup, &theme, window, cx)))
     }
 }

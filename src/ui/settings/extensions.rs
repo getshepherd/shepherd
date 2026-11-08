@@ -1,6 +1,7 @@
 //! Settings → Extensions, laid out as Zeron's Plugins: a tab of the extensions installed (`crate::extensions`), each
-//! a row with its version, an update, a switch that runs it, the bin and its settings (whether it runs always or with
-//! Shepherd, its folder), and a tab of the pages added by hand; Install opens a dialog for a GitHub release.
+//! a row with its version, an update, a switch that runs it, the bin and a dialog of its settings (whether it runs
+//! always or with Shepherd, its folder), and a tab of the pages added by hand; Install opens a dialog for a GitHub
+//! release.
 use super::*;
 use crate::extensions::{self as ext, Extension, Extensions, Release};
 
@@ -40,6 +41,39 @@ pub(super) enum Tab {
     #[default]
     Installed,
     Pages,
+}
+
+/// A dialog's card: Zeron's, 460 px, on the dialog surface.
+fn dialog_card(theme: &Theme, id: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .occlude()
+        .w(px(460.))
+        .p(px(24.))
+        .rounded(px(16.))
+        .bg(theme.dialog)
+        .border_1()
+        .border_color(theme.border)
+        .text_color(theme.text)
+        .text_size(px(13.))
+        .flex()
+        .flex_col()
+}
+
+/// `card` centered over the window on a 35 % scrim, both fading in and out with `popup`.
+fn modal<T>(name: &'static str, popup: &crate::ui::Popup<T>, card: Stateful<Div>, window: &Window) -> impl IntoElement + use<T> {
+    let viewport = window.viewport_size();
+    let scrim = div()
+        .id(SharedString::from(format!("{name}-scrim")))
+        .occlude()
+        .w(viewport.width)
+        .h(viewport.height)
+        .bg(gpui::black().opacity(0.35))
+        .flex()
+        .justify_center()
+        .items_center()
+        .child(crate::ui::dialog_motion(format!("{name}-in"), popup, div().id(SharedString::from(format!("{name}-motion"))).child(card), 2.));
+    gpui::deferred(gpui::anchored().position(gpui::point(px(0.), px(0.))).child(crate::ui::dialog_motion(format!("{name}-scrim-in"), popup, scrim, 0.))).with_priority(2)
 }
 
 /// The two ways an extension runs, as its state's `start` and the select's label.
@@ -221,8 +255,8 @@ impl SettingsView {
     }
 
     /// One installed extension, Zeron's plugin row: its icon; its name, where it came from and what it does; an
-    /// update when there is one, its version, its settings, a switch that runs it, and the bin. Its settings unfold
-    /// under it; once the bin is pressed, the row asks whether to remove it.
+    /// update when there is one, its version, its settings (a dialog), a switch that runs it, and the bin. Once the
+    /// bin is pressed, the row asks whether to remove it.
     fn extension_row(&self, i: usize, e: Extension, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let row = div().mx(px(16.)).py(px(14.)).when(i > 0, |el| el.border_t_1().border_color(theme.border.opacity(0.6)));
         if self.ext_remove.as_ref() == Some(&e.name) {
@@ -268,7 +302,7 @@ impl SettingsView {
         let version = e.source.as_ref().map(|s| {
             div().flex_none().px(px(6.)).py(px(1.)).rounded(px(5.)).bg(theme.wash(0.06)).text_size(px(12.)).text_color(theme.text_muted).child(s.tag.clone())
         });
-        let open = self.ext_open.as_ref() == Some(&e.name);
+        let open = self.ext_settings.as_ref().is_some_and(|d| d.is_open() && d.value == e.name);
         let icon_button = |id: &'static str, icon: &'static str, tone: gpui::Hsla, hover: gpui::Hsla| {
             div()
                 .id(id)
@@ -287,7 +321,7 @@ impl SettingsView {
             icon_button(web_select_id("ext-settings", &e.name), "icons/solar/tuning-2.svg", if open { theme.text } else { theme.text_muted }, theme.wash(0.08))
                 .when(open, |el| el.bg(theme.wash(0.08)))
                 .on_click(cx.listener(move |v, _: &ClickEvent, _, cx| {
-                    v.ext_open = if v.ext_open.as_ref() == Some(&name) { None } else { Some(name.clone()) };
+                    v.ext_settings = Some(crate::ui::Popup::new(name.clone()));
                     cx.notify();
                 }))
         };
@@ -316,40 +350,95 @@ impl SettingsView {
             .child(self.ext_icon(&e, theme))
             .child(text)
             .child(div().flex_none().flex().items_center().gap(px(8.)).children(update).children(version).child(settings).child(power).child(remove));
-        row.child(main).when(open, |el| el.child(self.extension_settings(&e, busy, theme, cx)))
+        row.child(main)
     }
 
-    /// An extension's settings, unfolded under its row: when it runs, and its folder.
-    fn extension_settings(&self, e: &Extension, busy: Option<&'static str>, theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let choices = STARTS.iter().map(|(start, label)| {
+    /// An extension's settings dialog: who it is, when it runs (each way with what it means), and its folder.
+    pub(super) fn settings_overlay(&self, popup: &crate::ui::Popup<String>, theme: &Theme, window: &Window, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let e = cx.try_global::<Extensions>()?.0.iter().find(|e| e.name == popup.value)?.clone();
+        let busy = self.ext_busy.as_ref().filter(|(name, _)| *name == e.name).map(|(_, doing)| *doing);
+        let from = e.source.as_ref().map_or("Installed by hand".to_string(), |s| format!("{} · {}", s.repo, s.tag));
+        let caption = |label: &'static str| div().mt(px(20.)).mb(px(8.)).text_size(px(12.)).text_color(theme.text_muted).child(label);
+        let meanings = ["Shepherd starts it, and stops it when it quits.", "The system runs it from login, so its CLI works with Shepherd closed."];
+        let options = STARTS.iter().zip(meanings).enumerate().map(|(i, ((start, label), meaning))| {
             let (e, start) = (e.clone(), *start);
-            choice(theme, web_select_id(&format!("ext-start-{start}"), &e.name), label, e.start == start)
-                .when(busy.is_none() && e.start != start, |el| el.on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.switch_start(e.clone(), start, cx))))
+            let chosen = e.start == start;
+            let hover = theme.wash(0.04);
+            div()
+                .id(web_select_id(&format!("ext-start-{start}"), &e.name))
+                .px(px(14.))
+                .py(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .when(i > 0, |el| el.border_t_1().border_color(theme.border.opacity(0.6)))
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .child(row_text(theme, *label, meaning))
+                .child(
+                    div()
+                        .flex_none()
+                        .size(px(16.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when(chosen, |el| el.child(gpui::svg().path("icons/check.svg").size(px(14.)).text_color(theme.accent))),
+                )
+                .when(busy.is_none() && !chosen, |el| el.on_click(cx.listener(move |v, _: &ClickEvent, _, cx| v.switch_start(e.clone(), start, cx))))
         });
-        let folder = e.binary.parent().map(std::path::Path::to_path_buf);
-        div()
-            // under the text, past the icon
-            .ml(px(54.))
-            .mt(px(14.))
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(div().flex().items_center().gap(px(8.)).child(div().w(px(56.)).text_color(theme.text_muted).child("Runs")).children(choices))
+        let folder = e.binary.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+        // as a person writes it: the home folder as ~
+        let home = crate::settings::home();
+        let path = folder.strip_prefix(&home).map_or_else(|_| folder.display().to_string(), |rest| format!("~/{}", rest.display()));
+        let card = dialog_card(theme, "ext-settings-dialog")
+            .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                if let Some(d) = v.ext_settings.as_mut() {
+                    d.close()
+                }
+                cx.notify();
+            }))
             .child(
                 div()
-                    .text_size(px(12.))
-                    .line_height(px(16.))
-                    .text_color(theme.text_muted)
-                    .child("While Shepherd is open: Shepherd starts it and stops it when it quits. Always: the system runs it from login, so its CLI works with Shepherd closed."),
+                    .flex()
+                    .items_center()
+                    .gap(px(14.))
+                    .child(self.ext_icon(&e, theme))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(div().text_size(px(17.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD).child(e.title()))
+                            .child(div().text_color(theme.text_muted).child(from)),
+                    ),
             )
-            .children(folder.map(|folder| {
-                div().flex().child(
-                    action(theme, web_select_id("ext-folder", &e.name), "Show in Finder")
-                        .gap(px(6.))
-                        .child(gpui::svg().path("icons/solar/folder-open.svg").size(px(14.)).text_color(theme.text_muted))
-                        .on_click(move |_, _, cx| cx.open_with_system(&folder)),
-                )
-            }))
+            .child(caption("Runs"))
+            .child(div().rounded(px(10.)).bg(theme.wash(0.045)).overflow_hidden().flex().flex_col().children(options))
+            .children(busy.map(|doing| div().mt(px(6.)).text_size(px(12.)).text_color(theme.text_muted).child(doing)))
+            .child(caption("Folder"))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(div().flex_1().min_w_0().text_size(px(12.)).text_color(theme.text_muted).whitespace_nowrap().overflow_hidden().text_ellipsis().child(path))
+                    .child(
+                        action(theme, "ext-settings-folder", "Show in Finder")
+                            .gap(px(6.))
+                            .child(gpui::svg().path("icons/solar/folder-open.svg").size(px(14.)).text_color(theme.text_muted))
+                            .on_click(move |_, _, cx| cx.open_with_system(&folder)),
+                    ),
+            )
+            .child(
+                div().mt(px(24.)).flex().justify_end().child(filled("ext-settings-done", "Done", theme.accent, theme.on_accent).on_click(cx.listener(|v, _: &ClickEvent, _, cx| {
+                    if let Some(d) = v.ext_settings.as_mut() {
+                        d.close()
+                    }
+                    cx.notify();
+                }))),
+            );
+        Some(modal("ext-settings", popup, card, window))
     }
 
     /// The Install dialog over the window: a repo to look up, then the build found to confirm.
@@ -378,19 +467,7 @@ impl SettingsView {
             }
             Install::Idle => filled("ext-install-go", "Continue", theme.accent, theme.on_accent).on_click(cx.listener(|v, _: &ClickEvent, _, cx| v.find_release(cx))),
         };
-        let card = div()
-            .id("install-dialog")
-            .occlude()
-            .w(px(460.))
-            .p(px(24.))
-            .rounded(px(16.))
-            .bg(theme.dialog)
-            .border_1()
-            .border_color(theme.border)
-            .text_color(theme.text)
-            .text_size(px(13.))
-            .flex()
-            .flex_col()
+        let card = dialog_card(theme, "install-dialog")
             .gap(px(8.))
             .on_mouse_down_out(cx.listener(|v, _, _, cx| v.close_install(cx)))
             .child(div().text_size(px(17.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD).child(title))
@@ -406,18 +483,7 @@ impl SettingsView {
                     .child(action(theme, "ext-install-cancel", "Cancel").on_click(cx.listener(|v, _: &ClickEvent, _, cx| v.close_install(cx))))
                     .child(go),
             );
-        let viewport = window.viewport_size();
-        let scrim = div()
-            .id("install-scrim")
-            .occlude()
-            .w(viewport.width)
-            .h(viewport.height)
-            .bg(gpui::black().opacity(0.35))
-            .flex()
-            .justify_center()
-            .items_center()
-            .child(crate::ui::dialog_motion("install-dialog-in", popup, div().id("install-dialog-motion").child(card), 2.));
-        gpui::deferred(gpui::anchored().position(gpui::point(px(0.), px(0.))).child(crate::ui::dialog_motion("install-scrim-in", popup, scrim, 0.))).with_priority(2)
+        modal("install", popup, card, window)
     }
 
     /// Zeron's tab: its label and count, underlined when shown.

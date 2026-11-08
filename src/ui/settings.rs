@@ -178,8 +178,8 @@ pub struct SettingsView {
     ext_tab: extensions::Tab,
     /// The Install dialog, up or playing its exit.
     install_dialog: Option<crate::ui::Popup<()>>,
-    /// The extension whose settings (when it runs, its folder) are unfolded under its row.
-    ext_open: Option<String>,
+    /// The settings dialog of an extension, by name (when it runs, its folder), up or playing its exit.
+    ext_settings: Option<crate::ui::Popup<String>>,
     /// Each extension's page icon as the sidebar last kept it, by name: read once a Settings.
     ext_icons: std::collections::HashMap<String, Option<std::sync::Arc<gpui::Image>>>,
     /// The web pages' name and URL fields, in the settings' order; made as entries come, dropped as they go.
@@ -446,7 +446,7 @@ impl SettingsView {
             ext_updates: None,
             ext_tab: Default::default(),
             install_dialog: None,
-            ext_open: None,
+            ext_settings: None,
             ext_icons: Default::default(),
             web_fields: Vec::new(),
             places: None,
