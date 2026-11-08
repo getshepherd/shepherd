@@ -10,6 +10,9 @@ fn main() {
     if args.first().is_some_and(|a| a == "device") {
         std::process::exit(shepherd::device::agent::cli(&args[1..]));
     }
+    if args.first().is_some_and(|a| a == "skill") {
+        std::process::exit(shepherd::agent_skill::cli(&args[1..]));
+    }
     let rt = tokio::runtime::Runtime::new().expect("tokio");
     let handle = rt.handle().clone();
     gpui_platform::application().with_assets(shepherd::assets::Assets).run(move |cx| {
@@ -22,10 +25,13 @@ fn main() {
         shepherd::herdr::set_binary(settings.herdr_bin.clone());
         shepherd::hc::set_sync(settings.hc_sync);
         shepherd::herdr::set_socket(settings.herdr_socket.clone());
-        // a worktree hooks plugin an older Shepherd installed gets this one's files
+        // a worktree hooks plugin and an agent skill an older Shepherd installed get this one's files
         std::thread::spawn(|| {
             if let Err(e) = shepherd::herdr::hooks::refresh() {
                 eprintln!("shepherd: worktree hooks: {e:#}");
+            }
+            if let Err(e) = shepherd::agent_skill::refresh() {
+                eprintln!("shepherd: agent skill: {e:#}");
             }
         });
         cx.set_global(settings.theme(cx.window_appearance()));

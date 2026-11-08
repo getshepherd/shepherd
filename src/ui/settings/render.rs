@@ -433,6 +433,33 @@ impl Render for SettingsView {
                                 )
                         }),
                 )
+                .child(section_label(&theme, "Agents"))
+                .child({
+                    // ponytail: read from disk on each render of this page, which renders seldom
+                    let on = crate::agent_skill::installed();
+                    card(&theme).mt_0().child(
+                        toggle_row(
+                            &theme,
+                            true,
+                            "agent-skill",
+                            "Agent skill",
+                            "Claude Code, Codex and Pi in the panes learn to start, follow and clean up after other agents on this backend: the shepherd skill in ~/.claude/skills and ~/.agents/skills.",
+                            on,
+                        )
+                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                            cx.spawn(async move |view, cx| {
+                                let done = cx.background_spawn(async move { crate::agent_skill::set(!on) }).await;
+                                let _ = view.update(cx, |_, cx| {
+                                    if let Err(e) = done {
+                                        crate::ui::toast::error(cx, format!("Agent skill: {e}"));
+                                    }
+                                    cx.notify();
+                                });
+                            })
+                            .detach();
+                        })),
+                    )
+                })
                 .when(on_herdr, |page| page.child(section_label(&theme, "Agent integrations")).child(self.integrations_block(&theme, cx)))
                 .when(on_herdr, |page| page.child(section_label(&theme, "herdr server")))
                 .when(on_herdr, |page| page.child({
