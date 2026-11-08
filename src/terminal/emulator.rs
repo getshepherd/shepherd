@@ -559,9 +559,11 @@ impl Emulator {
     }
 
     /// The cursor's (row, col) in viewport coordinates, shown or hidden: an IME composes there (agent TUIs hide the
-    /// cursor and park it at their input).
+    /// cursor and park it at their input). `None` while the viewport is scrolled back off the cursor's line: the
+    /// terminal's own cursor_x/y are on the active screen and would pin it to a row of old history.
     pub fn cursor_cell(&self) -> Option<(usize, usize)> {
-        Some((self.term.cursor_y().ok()? as usize, self.term.cursor_x().ok()? as usize))
+        let at = self.render.borrow_mut().state.update(&self.term).ok()?.cursor_viewport().ok()??;
+        Some((at.y as usize, at.x as usize))
     }
 
     fn hyperlink(&self, row: usize, col: usize) -> Option<String> {
@@ -893,6 +895,21 @@ mod tests {
         let mut e = emu(20, 2);
         e.feed(b"abcdef\x1b[3D\x1b[K"); // erase from cursor (col 3) to end
         assert_eq!(e.row_text(0), "abc");
+    }
+
+    #[test]
+    fn the_cursor_scrolls_with_the_history() {
+        // a raw stream keeps its own history: scrolled back, the cursor moves down with its line and then off screen
+        let mut e = Emulator::raw(10, 3);
+        e.feed(b"l1\r\nl2\r\nl3\r\nl4\r\n$ ");
+        assert_eq!(e.cursor().map(|c| (c.row, c.col)), Some((2, 2)));
+        e.scroll_to_offset(0);
+        assert_eq!(e.cursor_cell(), Some((2, 2)));
+        e.scroll_to_offset(1);
+        assert_eq!(e.cursor(), None, "the prompt's line is below the screen");
+        assert_eq!(e.cursor_cell(), None);
+        e.scroll_to_offset(0);
+        assert_eq!(e.cursor().map(|c| (c.row, c.col)), Some((2, 2)));
     }
 
     #[test]
