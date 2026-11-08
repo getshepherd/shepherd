@@ -219,6 +219,8 @@ pub struct PaneTerminal {
     /// The last grid resize, to pace them under `GridHold`.
     resized_at: Option<std::time::Instant>,
     focus: FocusHandle,
+    /// Redraws the pane when it gains or loses the focus, which its cursor shows; made on its first render.
+    _focus_watch: Vec<Subscription>,
     wheel_acc: f32,
     drag: Option<Drag>,
     /// The pane's app asks for mouse reporting (from herdr; false until it says otherwise).
@@ -299,6 +301,7 @@ impl PaneTerminal {
             geometry: None,
             resized_at: None,
             focus: cx.focus_handle(),
+            _focus_watch: Vec::new(),
             wheel_acc: 0.0,
             drag: None,
             mouse_capture: false,
@@ -1238,6 +1241,11 @@ impl Render for PaneTerminal {
         }
         crate::ui::reap_popup(&mut self.preview, window);
         crate::ui::reap_popup(&mut self.reader, window);
+        // The pane is a cached view, and a focus the shell moves while it draws (herdr's focus, a shortcut) refreshes
+        // nothing: herdr's next frame redrew it, a raw stream (Rex) may send none for a while.
+        if self._focus_watch.is_empty() {
+            self._focus_watch = vec![cx.on_focus(&self.focus, window, |_, _, cx| cx.notify()), cx.on_blur(&self.focus, window, |_, _, cx| cx.notify())];
+        }
         let focused = self.focus.is_focused(window);
         let search_bar = self.search.as_ref().map(|search| self.search_bar(search, &theme, cx));
         let loader = (self.session.is_none() && crate::ui::loader::due(self.attaching, window)).then(|| {
