@@ -33,7 +33,19 @@ pub struct Extension {
     pub binary: PathBuf,
     /// Its server answered the last ping.
     pub alive: bool,
+    /// The GitHub release it was installed from, when Shepherd installed it: what it is updated from.
+    pub source: Option<Source>,
 }
+
+/// `source.json` in an extension's folder, Shepherd's own beside paddock's `state.json`: the repo and the release tag
+/// it installed. An extension installed by hand (`go run . install`) has none and isn't offered updates.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, Deserialize)]
+pub struct Source {
+    pub repo: String,
+    pub tag: String,
+}
+
+const SOURCE: &str = "source.json";
 
 /// The extensions installed, as last scanned.
 #[derive(Default)]
@@ -66,7 +78,8 @@ pub fn scan(root: &Path) -> Vec<Extension> {
             let binary = dir.join(if cfg!(windows) { format!("{name}.exe") } else { name.clone() });
             // paddock's default when it is unset
             let start = if state.start.is_empty() { "login".into() } else { state.start };
-            binary.is_file().then_some(Extension { name, description: state.description, port: state.port, token: state.token, start, binary, alive: false })
+            let source = std::fs::read(dir.join(SOURCE)).ok().and_then(|b| serde_json::from_slice(&b).ok());
+            binary.is_file().then_some(Extension { name, description: state.description, port: state.port, token: state.token, start, binary, alive: false, source })
         })
         .collect();
     found.sort_by(|a, b| a.name.cmp(&b.name));
@@ -392,9 +405,11 @@ pub fn latest_release(repo: &str) -> Result<Release, String> {
     release_of(repo, &json, &asset_suffix())
 }
 
-/// Downloads the release's build to a folder of its own and runs it as `install --start shepherd`, which copies it
-/// into the extensions; the download goes with the folder. Blocking.
-pub fn install(release: &Release) -> Result<(), String> {
+/// Downloads the release's build to a folder of its own and runs it as `install --start <start>` (`shepherd` for a new
+/// one, an update keeps its own), which copies it into the extensions; the download goes with the folder. Then notes
+/// where it came from in its folder, for updates. Blocking.
+pub fn install(release: &Release, start: &str) -> Result<(), String> {
+    let since = SystemTime::now() - Duration::from_secs(1);
     let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
     let path = tmp.path().join(&release.asset);
     let bytes = agent()
@@ -408,7 +423,27 @@ pub fn install(release: &Release) -> Result<(), String> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
     }
-    run(&path, &["install", "--start", "shepherd"])
+    run(&path, &["install", "--start", start])?;
+    let source = Source { repo: release.repo.clone(), tag: release.tag.clone() };
+    note_source(&root(), since, &source).map_err(|e| e.to_string())
+}
+
+/// Writes `source` into the folder of the extension installed since `since`: its folder is named by the binary
+/// itself, so it is the one whose binary was just put there. None found (an install that wrote nowhere): nothing.
+fn note_source(root: &Path, since: SystemTime, source: &Source) -> std::io::Result<()> {
+    let installed = scan(root).into_iter().filter(|e| modified(&e.binary).is_some_and(|t| t >= since)).max_by_key(|e| modified(&e.binary));
+    match installed {
+        Some(ext) => std::fs::write(root.join(&ext.name).join(SOURCE), serde_json::to_vec(source)?),
+        None => Ok(()),
+    }
+}
+
+/// The release to update `ext` to: its repo's latest, when that isn't the one installed. `Ok(None)` when it is up to
+/// date or wasn't installed from GitHub. Blocking.
+pub fn update_for(ext: &Extension) -> Result<Option<Release>, String> {
+    let Some(source) = &ext.source else { return Ok(None) };
+    let latest = latest_release(&source.repo)?;
+    Ok((latest.tag != source.tag).then_some(latest))
 }
 
 /// A color as CSS: `#rrggbb` when opaque.
@@ -514,6 +549,43 @@ mod tests {
         assert_eq!((r.tag.as_str(), r.asset.as_str(), r.url.as_str()), ("v0.1.0", "weather-darwin-arm64", "https://x/mac"));
         let e = release_of("you/weather", &json, "-windows-amd64.exe").unwrap_err();
         assert!(e.contains("no build for this computer"), "{e}");
+    }
+
+    #[test]
+    fn the_release_installed_is_noted_in_its_folder_and_read_back() {
+        let root = tempfile::tempdir().unwrap();
+        let make = |name: &str| {
+            let dir = root.path().join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("state.json"), r#"{"port": 1, "token": "t"}"#).unwrap();
+            std::fs::write(dir.join(if cfg!(windows) { format!("{name}.exe") } else { name.into() }), "bin").unwrap();
+        };
+        make("old");
+        let since = SystemTime::now();
+        std::thread::sleep(Duration::from_millis(20));
+        make("weather");
+        let source = Source { repo: "you/weather".into(), tag: "v0.2.0".into() };
+        note_source(root.path(), since, &source).unwrap();
+        let found = scan(root.path());
+        assert_eq!(found.iter().find(|e| e.name == "weather").unwrap().source, Some(source));
+        assert_eq!(found.iter().find(|e| e.name == "old").unwrap().source, None, "installed by hand: nothing to update from");
+    }
+
+    /// Live: getshepherd/automations' latest release installed from GitHub into a home of its own, its source noted, and
+    /// an update offered only once the noted tag is another.
+    /// `RUSTUP_HOME=~/.rustup CARGO_HOME=~/.cargo HOME=$(mktemp -d) cargo test --lib extensions::tests::live_update -- --ignored`
+    #[test]
+    #[ignore]
+    fn live_update() {
+        // and RUSTUP_HOME and CARGO_HOME the real ones, for cargo itself
+        assert!(!root().join("automations").exists(), "a HOME of its own: it installs into it");
+        let release = latest_release("getshepherd/automations").unwrap();
+        install(&release, "shepherd").unwrap();
+        let ext = scan(&root()).into_iter().find(|e| e.name == "automations").expect("installed");
+        assert_eq!(ext.source, Some(Source { repo: "getshepherd/automations".into(), tag: release.tag.clone() }));
+        assert_eq!(update_for(&ext), Ok(None), "the latest is in");
+        let older = Extension { source: Some(Source { repo: "getshepherd/automations".into(), tag: "v0.0.0".into() }), ..ext };
+        assert_eq!(update_for(&older).unwrap().map(|r| r.tag), Some(release.tag));
     }
 
     #[test]
