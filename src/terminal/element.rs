@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -217,11 +218,8 @@ pub struct TerminalPrepaint {
     /// before the glyphs: it has to tint a cell's own background rather than
     /// replace it, and it must not wash out the text it is highlighting.
     selection: Vec<gpui::Path<Pixels>>,
-    /// Per row, the shaped segments and the grid COLUMN each one starts at.
-    /// Not one line per row: see [`shape_row`].
-    lines: Vec<Vec<(usize, ShapedLine)>>,
-    /// Per row, the cells drawn by [`sprite`] instead of the font.
-    glyphs: Vec<Vec<CustomGlyph>>,
+    /// Every row's text, laid out: see [`RowLayout`].
+    rows: Vec<Rc<RowLayout>>,
     /// Light line width for sprite glyphs, in logical pixels.
     stroke: f32,
     /// Grid cell advance, so paint can place segments by column.
@@ -332,8 +330,7 @@ impl gpui::Element for TerminalElement {
                 bg_quads: Vec::new(),
                 mark_quads: Vec::new(),
                 selection: Vec::new(),
-                lines: Vec::new(),
-                glyphs: Vec::new(),
+                rows: Vec::new(),
                 stroke: 1.0,
                 cell_w,
                 line_h,
@@ -348,8 +345,6 @@ impl gpui::Element for TerminalElement {
         let mut bg_quads = Vec::new();
         let mut mark_quads = Vec::new();
         let mut selected = Vec::new();
-        let mut lines = Vec::with_capacity(snapshot.lines.len());
-        let mut glyphs = Vec::with_capacity(snapshot.lines.len());
         let cursor_rect = snapshot.cursor.as_ref().map(|c| {
             let cell = Bounds::new(
                 point(origin.x + cell_w * c.col as f32, origin.y + line_h * c.row as f32),
@@ -401,45 +396,49 @@ impl gpui::Element for TerminalElement {
             )
             .corner_radii(line_h * SELECTION_RADIUS));
         }
+        let style = RowStyle {
+            font: mono.clone(),
+            font_size,
+            cell_w,
+            appearance: theme.appearance,
+            palette: theme.terminal.clone(),
+        };
+        let lay_out = |cache: Option<RowCache>, window: &mut Window| {
+            let old = cache.filter(|c| c.style == style).map_or_else(Vec::new, |c| c.rows);
+            let mut shift = 0;
+            let rows: Vec<Rc<RowLayout>> = snapshot
+                .lines
+                .iter()
+                .enumerate()
+                .map(|(ix, cells)| {
+                    let cursor = block_cursor.filter(|&(r, _)| r == ix).map(|(_, c)| c);
+                    RowLayout::find(&old, ix, cells, cursor, &mut shift).cloned().unwrap_or_else(|| {
+                        Rc::new(RowLayout::new(cells, cursor.map(|c| (c, cursor_text)), &theme, &mono, font_size, cell_w, window))
+                    })
+                })
+                .collect();
+            (rows.clone(), RowCache { style: style.clone(), rows })
+        };
+        let rows = match id {
+            Some(id) => window.with_element_state(id, lay_out),
+            None => lay_out(None, window).0,
+        };
         for (row_ix, row) in snapshot.lines.iter().enumerate() {
-            let y = origin.y + line_h * row_ix as f32;
             // The emulator's selection is one run per row.
             if let (Some(start), Some(end)) =
                 (row.iter().position(|cell| cell.selected), row.iter().rposition(|cell| cell.selected))
             {
                 selected.push((row_ix, start..end + 1));
             }
-            // Merge consecutive non-default background cells into quads.
-            let mut run_start: Option<(usize, Hsla)> = None;
-            for (col, color) in row
-                .iter()
-                .map(|cell| cell.display_colors().1)
-                .chain(std::iter::once(CellColor::Background))
-                .enumerate()
-            {
-                let paint = match color {
-                    CellColor::Background => None,
-                    other => Some(resolve_color(other, &theme)),
-                };
-                match (&run_start, paint) {
-                    (None, Some(color)) => run_start = Some((col, color)),
-                    (Some((start, current)), next) if next != Some(*current) => {
-                        bg_quads.push(fill(
-                            Bounds::new(
-                                point(origin.x + cell_w * *start as f32, y),
-                                size(cell_w * (col - *start) as f32, line_h),
-                            ),
-                            *current,
-                        ));
-                        run_start = next.map(|color| (col, color));
-                    }
-                    _ => {}
-                }
+        }
+        for (row_ix, row) in rows.iter().enumerate() {
+            let y = origin.y + line_h * row_ix as f32;
+            for (cols, color) in &row.bg {
+                bg_quads.push(fill(
+                    Bounds::new(point(origin.x + cell_w * cols.start as f32, y), size(cell_w * cols.len() as f32, line_h)),
+                    *color,
+                ));
             }
-            let mut row_glyphs = Vec::new();
-            let cursor_col = block_cursor.filter(|&(r, _)| r == row_ix).map(|(_, c)| (c, cursor_text));
-            lines.push(shape_row(row, &theme, &mono, font_size, cell_w, cursor_col, &mut row_glyphs, window));
-            glyphs.push(row_glyphs);
         }
 
         let cursor = cursor_rect.map(|rect| {
@@ -496,8 +495,7 @@ impl gpui::Element for TerminalElement {
             bg_quads,
             mark_quads,
             selection,
-            lines,
-            glyphs,
+            rows,
             // The font's underline thickness is ~0.05em; Ghostty strokes box
             // lines with it. ponytail: gpui doesn't expose the real
             // metric, so approximate it.
@@ -564,9 +562,9 @@ impl gpui::Element for TerminalElement {
                 window.paint_quad(cursor);
             }
             let cell_w = prepaint.cell_w;
-            for (ix, segments) in prepaint.lines.iter().enumerate() {
+            for (ix, row) in prepaint.rows.iter().enumerate() {
                 let y = origin.y + line_h * ix as f32;
-                for (col, line) in segments {
+                for (col, line) in &row.lines {
                     let _ = line.paint(
                         point(origin.x + cell_w * *col as f32, y),
                         line_h,
@@ -577,9 +575,9 @@ impl gpui::Element for TerminalElement {
                     );
                 }
             }
-            for (ix, row) in prepaint.glyphs.iter().enumerate() {
+            for (ix, row) in prepaint.rows.iter().enumerate() {
                 let y = origin.y + line_h * ix as f32;
-                for glyph in row {
+                for glyph in &row.glyphs {
                     let left = origin.x + cell_w * glyph.col as f32;
                     let bounds = Bounds::from_corners(
                         point(left, y),
@@ -986,6 +984,88 @@ fn shape_row(
     segments
 }
 
+/// What a row's layout depends on besides its cells: a change to any of them lays out every row afresh.
+#[derive(Clone, PartialEq)]
+struct RowStyle {
+    font: gpui::Font,
+    font_size: Pixels,
+    cell_w: Pixels,
+    appearance: Appearance,
+    palette: crate::theme::TerminalPalette,
+}
+
+/// The rows a terminal laid out in its last frame. A scroll moves every row on screen, yet each one shows the
+/// cells some row showed a frame ago, so only the rows it brings in are shaped; so it is with output that scrolls
+/// the screen, or one that changes a few rows.
+struct RowCache {
+    style: RowStyle,
+    rows: Vec<Rc<RowLayout>>,
+}
+
+/// One row's cells, laid out for paint at any height.
+struct RowLayout {
+    cells: Vec<CellSnapshot>,
+    /// The block cursor's column, when it is on this row: its cell is shaped apart, in the background's color.
+    cursor: Option<usize>,
+    /// Non-default backgrounds: runs of columns and their color.
+    bg: Vec<(Range<usize>, Hsla)>,
+    /// The shaped segments and the grid COLUMN each one starts at. Not one line per row: see [`shape_row`].
+    lines: Vec<(usize, ShapedLine)>,
+    /// The cells drawn by [`sprite`] instead of the font.
+    glyphs: Vec<CustomGlyph>,
+}
+
+impl RowLayout {
+    fn new(
+        cells: &[CellSnapshot],
+        cursor: Option<(usize, Hsla)>,
+        theme: &Theme,
+        mono: &gpui::Font,
+        font_size: Pixels,
+        cell_w: Pixels,
+        window: &Window,
+    ) -> Self {
+        // Merge consecutive non-default background cells into runs.
+        let mut bg = Vec::new();
+        let mut run_start: Option<(usize, Hsla)> = None;
+        for (col, color) in cells
+            .iter()
+            .map(|cell| cell.display_colors().1)
+            .chain(std::iter::once(CellColor::Background))
+            .enumerate()
+        {
+            let paint = match color {
+                CellColor::Background => None,
+                other => Some(resolve_color(other, theme)),
+            };
+            match (&run_start, paint) {
+                (None, Some(color)) => run_start = Some((col, color)),
+                (Some((start, current)), next) if next != Some(*current) => {
+                    bg.push((*start..col, *current));
+                    run_start = next.map(|color| (col, color));
+                }
+                _ => {}
+            }
+        }
+        let mut glyphs = Vec::new();
+        let lines = shape_row(cells, theme, mono, font_size, cell_w, cursor, &mut glyphs, window);
+        Self { cells: cells.to_vec(), cursor: cursor.map(|(col, _)| col), bg, lines, glyphs }
+    }
+
+    /// The old row that row `ix` is laid out as, if one has its cells. `shift` is the offset from the last row
+    /// found to its old one, tried first: a scroll moves every row by the same lines, so the search is the
+    /// exception.
+    fn find<'a>(old: &'a [Rc<Self>], ix: usize, cells: &[CellSnapshot], cursor: Option<usize>, shift: &mut isize) -> Option<&'a Rc<Self>> {
+        let same = |row: &&Rc<Self>| row.cursor == cursor && row.cells == cells;
+        let guess = ix.checked_add_signed(*shift).and_then(|j| old.get(j)).filter(same);
+        guess.or_else(|| {
+            let j = old.iter().position(|row| same(&row))?;
+            *shift = j as isize - ix as isize;
+            old.get(j)
+        })
+    }
+}
+
 /// The row text being gathered into one shaped segment, with the grid column of each of its bytes.
 #[derive(Default)]
 struct Segment {
@@ -1343,6 +1423,28 @@ mod tests {
     #[test]
     fn drag_threshold_matches_the_gpui_default() {
         assert_eq!(SELECTION_DRAG_THRESHOLD, 2.0);
+    }
+
+    #[test]
+    fn a_scrolled_row_is_laid_out_as_the_row_that_showed_its_cells() {
+        let row = |text: &str| {
+            let mut emu = crate::terminal::emulator::Emulator::new(8, 1);
+            emu.feed(text.as_bytes());
+            emu.line(0)
+        };
+        let laid = |cells: Vec<CellSnapshot>, cursor| Rc::new(RowLayout { cells, cursor, bg: Vec::new(), lines: Vec::new(), glyphs: Vec::new() });
+        let old: Vec<_> = ["a", "b", "c", "d"].map(|t| laid(row(t), None)).into();
+        // scrolled one line back: "z" is new, the rest moved down a row
+        let mut shift = 0;
+        let found: Vec<_> = ["z", "a", "b", "c"]
+            .iter()
+            .enumerate()
+            .map(|(ix, t)| RowLayout::find(&old, ix, &row(t), None, &mut shift).map(|r| old.iter().position(|o| Rc::ptr_eq(o, r)).unwrap()))
+            .collect();
+        assert_eq!(found, [None, Some(0), Some(1), Some(2)]);
+        assert_eq!(shift, -1);
+        // the block cursor on a row shapes it apart
+        assert!(RowLayout::find(&old, 0, &row("a"), Some(0), &mut 0).is_none());
     }
 
     #[test]

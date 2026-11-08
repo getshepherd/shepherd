@@ -47,7 +47,7 @@ impl Default for FontSettings {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TerminalPalette {
     pub background: Hsla,
     pub foreground: Hsla,
