@@ -1304,9 +1304,10 @@ mod tests {
     fn checkout() -> (tempfile::TempDir, Place) {
         let repo = tempfile::tempdir().unwrap();
         sh(repo.path(), "git init -q && printf 'target/\\n' > .gitignore && mkdir -p src target/debug && echo fn > src/main.rs && echo x > target/debug/out && echo a > .env && git add -A && git -c user.name=t -c user.email=t@t commit -qm init && echo changed > src/main.rs && echo new > new.txt");
-        let root = std::fs::canonicalize(repo.path()).unwrap().to_string_lossy().into_owned();
-        let place = Place::of(&format!("{root}/src"));
-        assert_eq!(place.root, root);
+        let place = Place::of(&repo.path().join("src").to_string_lossy());
+        // git spells the root its own way (`C:/…` on Windows, `/private/var/…` for macOS's temp dir), so the two
+        // are compared as the file they name, not as strings.
+        assert_eq!(std::fs::canonicalize(&place.root).unwrap(), std::fs::canonicalize(repo.path()).unwrap());
         (repo, place)
     }
 
