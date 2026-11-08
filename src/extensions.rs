@@ -88,7 +88,14 @@ impl Extension {
 
     /// Its page as a sidebar entry, listed everywhere and opened here.
     pub fn entry(&self) -> WebEntry {
-        WebEntry { id: format!("{PAGE_PREFIX}{}", self.name), name: self.name.clone(), url: self.url(), ..Default::default() }
+        WebEntry { id: format!("{PAGE_PREFIX}{}", self.name), name: self.title(), url: self.url(), ..Default::default() }
+    }
+
+    /// What the sidebar calls it: its name, which is also its folder's, its binary's and its CLI's, so lowercase, with
+    /// a capital, as an app's name is written.
+    pub fn title(&self) -> String {
+        let mut chars = self.name.chars();
+        chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
     }
 }
 
@@ -533,6 +540,7 @@ mod tests {
         make("broken", "{", true);
         let found = scan(root.path());
         assert_eq!(found.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["demo", "plain"]);
+        assert_eq!(found[0].entry().name, "Demo", "the sidebar writes it with a capital");
         assert!(found[0].runs_with_shepherd());
         assert_eq!(found[1].start, "login");
         assert_eq!(found[0].url(), "http://127.0.0.1:5000/?token=t");
