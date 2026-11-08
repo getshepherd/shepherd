@@ -11,6 +11,7 @@ pub mod changes;
 pub mod commands;
 pub mod device;
 pub mod extensions;
+pub mod files;
 pub mod hc;
 pub mod herdr;
 pub mod mock;

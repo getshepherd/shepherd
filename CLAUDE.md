@@ -52,7 +52,8 @@ Before opening a PR, and in its description:
   change touches, and attach both to the PR. `docs/mock/shot.sh <out.png>` shoots the window from the mock fixture on
   macOS (`make linux-shot` on Linux, below), and
   `SHEPHERD_PANEL=commands|agents|workspaces|sessions|browser|diffs|usage|review[:summary|timeline|code|checks|menu]` opens a
-  panel for the shot (`browser`, a blank browser tab in the right panel; `diffs`, the Diffs tab; `usage`, the limits popup;
+  panel for the shot (`browser`, a blank browser tab in the right panel; `diffs`, the Diffs tab; `files`, the Files tab,
+  `files:<path>` with that path shown in its tree, `file:<path>` the file's own tab; `usage`, the limits popup;
   `device:ios:<udid>`, a device's tab, `:tools` and `:tools:overlay` after it its Tools panel and accessibility overlay,
   `:text-size` the rail's Text size menu). If a change has
   nothing to see (an internal refactor, a backend fix), say so instead.

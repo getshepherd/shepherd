@@ -6,7 +6,6 @@
   "sidebar_width": 236,
   "compact_workspaces": true,
   "compact_agents": true,
-  "status_icons": "dots",
   "status_bar_show": {"usage": false, "tokens": false},
   "notify_agents": false,
   "notify_sound": false,

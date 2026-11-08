@@ -42,3 +42,4 @@ tree-sitter-zig = "=1.1.2"
 # the grammar only: the crate is published without its queries, ours are in queries/graphql
 tree-sitter-graphql = "=0.3.0"
 tree-sitter-dart = "=0.3.0"
+tree-sitter-objc = "=3.0.2"
