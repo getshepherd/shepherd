@@ -5,6 +5,7 @@ use crate::settings::PaneStyle;
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::ui::reap_popup(&mut self.open_select, window);
+        crate::ui::reap_popup(&mut self.install_dialog, window);
         self.sync_web_fields(window, cx);
         let theme = Theme::of(cx).clone();
         let global = SettingsGlobal::of(cx);
@@ -33,6 +34,9 @@ impl Render for SettingsView {
         }
         if self.section == Section::Extensions && self.ext_updates.is_none() {
             self.check_updates(cx);
+        }
+        if self.section == Section::Extensions {
+            self.load_ext_icons(cx);
         }
         // the number fields follow the setting when it changes elsewhere (a chevron, Cmd+=), even while typed in
         let shown = numbers(&settings);
@@ -401,8 +405,7 @@ impl Render for SettingsView {
                     "Extensions",
                     "Tools with a page in the sidebar, above the workspaces, and a CLI for agents; and web pages of your own.",
                 ))
-                .child(self.extensions(&theme, cx))
-                .child(self.web_pages(&theme, cx)),
+                .child(self.extensions(&theme, cx)),
             Section::Worktrees => self.worktrees_page(&theme, cx),
             Section::Backend => div()
                 .child(page_header(&theme, "Backend", "What runs the terminals. Shepherd shows one at a time, with its own workspaces."))
@@ -580,6 +583,10 @@ impl Render for SettingsView {
                 }
                 if e.keystroke.key == "escape" {
                     cx.stop_propagation();
+                    if v.install_dialog.as_ref().is_some_and(|d| d.is_open()) {
+                        v.close_install(cx);
+                        return;
+                    }
                     cx.emit(Close);
                     return;
                 }
@@ -626,5 +633,6 @@ impl Render for SettingsView {
                 )
                 .child(crate::ui::scrollbar("settings-scrollbar", &self.body_scroll, &theme)),
             )
+            .children(self.install_dialog.as_ref().map(|popup| self.install_overlay(popup, &theme, window, cx)))
     }
 }

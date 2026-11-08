@@ -66,12 +66,10 @@ impl SettingsView {
     }
 
     /// The pages added by hand, Zeron's way: each page a block of labelled fields on a two-column grid
-    /// (name and URL, where it is listed and where it opens) with a red bin to remove it, "Add page" by the section's
-    /// label.
+    /// (name and URL, where it is listed and where it opens) with a red bin to remove it; Add page is by the tabs.
     pub(super) fn web_pages(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let settings = &SettingsGlobal::of(cx).settings;
         let entries = settings.web_entries.clone();
-        let muted = theme.text_muted;
         let labelled = |label: &'static str, control: Div| labelled(theme, label, control);
         let pair = |left: Div, right: Div| div().flex().gap(px(12.)).child(left).child(right);
         let rows: Vec<Div> = self
@@ -130,31 +128,13 @@ impl SettingsView {
             })
             .collect();
         let empty = rows.is_empty();
-        div()
-            .child(
-                div()
-                    .mt(px(32.))
-                    .mb(px(8.))
-                    .pl(px(8.))
-                    .flex()
-                    .items_center()
-                    .child(div().flex_1().text_color(muted).child("Web pages"))
-                    .child(
-                        action(theme, "web-add", "Add page")
-                            .gap(px(6.))
-                            .child(gpui::svg().path("icons/solar/add-circle.svg").size(px(14.)).text_color(muted))
-                            .on_click(|_, _, cx| update(cx, |s| s.web_entries.push(WebEntry::new()))),
-                    ),
-            )
-            .child(
-                card(theme).mt(px(0.)).children(rows).when(empty, |el| {
-                    el.child(card_row(theme, true).child(row_text(
-                        theme,
-                        "No web pages yet",
-                        "Any URL as a page of its own: a dev server, a dashboard, a tool on a machine.",
-                    )))
-                }),
-            )
+        card(theme).mt(px(16.)).children(rows).when(empty, |el| {
+            el.child(card_row(theme, true).child(row_text(
+                theme,
+                "No web pages yet",
+                "Any URL as a page of its own: a dev server, a dashboard, a tool on a machine.",
+            )))
+        })
     }
 
     /// General's Links: where a link opens, from a page or from a terminal.
