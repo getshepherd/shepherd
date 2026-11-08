@@ -163,8 +163,11 @@ impl SettingsView {
             move |i: usize, cx: &mut App| {
                 let start = STARTS[i].0;
                 if start != e.start && busy.is_none() {
-                    let e = e.clone();
-                    let _ = view.update(cx, |v, cx| v.switch_start(e, start, cx));
+                    let (e, view) = (e.clone(), view.clone());
+                    // the select calls this while it updates the view: the switch waits until it is done
+                    cx.defer(move |cx| {
+                        let _ = view.update(cx, |v, cx| v.switch_start(e, start, cx));
+                    });
                 }
             }
         };
