@@ -290,6 +290,10 @@ impl Shell {
 
     /// The entry clicked in the sidebar: its page shown (made on first show).
     pub(super) fn show_web(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        // an extension whose server doesn't answer is started, and its page loaded again once it does
+        if let Some(ext) = crate::extensions::by_page(cx, &id).filter(|e| !e.alive) {
+            self.extension_server(ext.clone(), true, cx);
+        }
         if self.ensure_page(&id, window, cx) {
             self.pages.shown = Some(id);
             cx.notify();
@@ -881,6 +885,27 @@ impl Shell {
             })
     }
 
+    /// Starts (`up`) or stops the extension's server off the main thread; once started, its page is loaded again.
+    /// What failed is a toast.
+    fn extension_server(&mut self, ext: crate::extensions::Extension, up: bool, cx: &mut Context<Self>) {
+        let key = self.page_key(&ext.entry());
+        let task = cx.background_spawn(async move {
+            if up { crate::extensions::start_server(&ext) } else { crate::extensions::stop_server(&ext) }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(()) if up => this.reload_page(&key),
+                    Ok(()) => {}
+                    Err(why) => crate::ui::toast::error(cx, why),
+                }
+                crate::extensions::refresh(cx);
+            });
+        })
+        .detach();
+    }
+
     /// The extensions' open pages put on the theme now in force, without a reload.
     pub(super) fn restyle_extension_pages(&self, cx: &App) {
         for ((id, _), page) in &self.pages.live {
@@ -938,7 +963,7 @@ impl Shell {
         let (id, at) = menu.value.clone();
         let entry = sidebar_entries(cx).into_iter().find(|e| e.id == id)?;
         // an extension's page is the extension's: removed with it, not here
-        let extension = crate::extensions::by_page(cx, &id).is_some();
+        let extension = crate::extensions::by_page(cx, &id).cloned();
         let url = normalize(&entry.url);
         let key = self.page_key(&entry);
         let loaded = self.pages.live.contains_key(&key);
@@ -955,6 +980,11 @@ impl Shell {
                 }),
             )
         };
+        let server = extension.clone().map(|ext| {
+            let (label, up) = if ext.alive { ("Stop Server", false) } else { ("Start Server", true) };
+            item("web-menu-server", label, Box::new(move |this, _, cx| this.extension_server(ext.clone(), up, cx)))
+        });
+        let extension = extension.is_some();
         let (copied, removed) = (url.clone(), id.clone());
         let card = menu_card(theme, "web-menu", 160.)
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -977,6 +1007,7 @@ impl Shell {
                 "Copy URL",
                 Box::new(move |_, _, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string(copied.clone()))),
             ))
+            .children(server)
             .child(item("web-menu-edit", "Edit…", Box::new(|this, window, cx| this.open_web_settings(window, cx))))
             .when(!extension, |el| el.child(div().mx(px(-4.)).my(px(4.)).h(px(1.)).bg(theme.border)))
             .when(!extension, |el| el.child(

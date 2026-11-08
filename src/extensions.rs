@@ -160,6 +160,14 @@ struct Run {
     started: Instant,
     failures: u32,
     retry_at: Instant,
+    /// Stopped from Settings or the sidebar: not started again until started there or its page is opened.
+    held: bool,
+}
+
+/// `ext`'s run, a new one if it has none.
+fn run_of<'a>(runs: &'a mut HashMap<String, Run>, ext: &Extension, now: Instant) -> &'a mut Run {
+    let binary = modified(&ext.binary);
+    runs.entry(ext.name.clone()).or_insert(Run { child: None, binary, started: now, failures: 0, retry_at: now, held: false })
 }
 
 static RUNS: LazyLock<Mutex<HashMap<String, Run>>> = LazyLock::new(Default::default);
@@ -196,7 +204,7 @@ fn supervise(list: &[Extension]) {
     let now = Instant::now();
     for ext in list.iter().filter(|e| e.runs_with_shepherd()) {
         let binary = modified(&ext.binary);
-        let run = runs.entry(ext.name.clone()).or_insert(Run { child: None, binary, started: now, failures: 0, retry_at: now });
+        let run = run_of(&mut runs, ext, now);
         if run.binary != binary {
             stop(run);
             (run.binary, run.failures, run.retry_at) = (binary, 0, now);
@@ -212,7 +220,7 @@ fn supervise(list: &[Extension]) {
         }
         // something else already serves it: a `serve` run by hand, or one a Shepherd that crashed left behind
         // ponytail: that one isn't restarted when its binary changes; it would be, killed by its pid from paddock's state
-        if run.failures >= GIVE_UP || now < run.retry_at || ext.alive {
+        if run.held || run.failures >= GIVE_UP || now < run.retry_at || ext.alive {
             continue;
         }
         match serve(ext) {
@@ -238,6 +246,50 @@ pub fn stop_all() {
     for run in RUNS.lock().unwrap().values_mut() {
         stop(run);
     }
+}
+
+/// Starts its server: Shepherd's own `serve` (one that gave up or was stopped too), or the system's service
+/// (`<binary> start`); then waits, a few seconds at most, for it to answer. Blocking.
+pub fn start_server(ext: &Extension) -> Result<(), String> {
+    if ext.runs_with_shepherd() {
+        let mut runs = RUNS.lock().unwrap();
+        let now = Instant::now();
+        let run = run_of(&mut runs, ext, now);
+        (run.held, run.failures, run.retry_at) = (false, 0, now);
+        if run.child.is_none() && !ping(ext.port, &ext.token) {
+            run.child = Some(serve(ext).map_err(|e| format!("{}: {e}", ext.binary.display()))?);
+            run.started = now;
+        }
+    } else {
+        run(&ext.binary, &["start"])?;
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ping(ext.port, &ext.token) {
+        if Instant::now() > deadline {
+            return Err(format!("{} didn't answer; its log is {}", ext.name, ext.binary.with_file_name("log").display()));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Ok(())
+}
+
+/// Stops its server: Shepherd's own `serve`, held so it isn't started again, or the system's service (`<binary> stop`).
+/// Blocking.
+pub fn stop_server(ext: &Extension) -> Result<(), String> {
+    if !ext.runs_with_shepherd() {
+        return run(&ext.binary, &["stop"]);
+    }
+    let mut runs = RUNS.lock().unwrap();
+    let run = run_of(&mut runs, ext, Instant::now());
+    run.held = true;
+    let ours = run.child.is_some();
+    stop(run);
+    // ponytail: one Shepherd didn't start (a `serve` by hand, or left by a Shepherd that crashed) is only held, not
+    // killed; it would be, by its pid from paddock's state
+    if !ours && ext.alive {
+        return Err(format!("{} is served by a process Shepherd didn't start: stop that one", ext.name));
+    }
+    Ok(())
 }
 
 /// Switches when the extension runs: `<binary> install --start <start>`, which sets up or takes down the system's
@@ -488,7 +540,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_serve_restarts_when_its_binary_changes_and_after_it_exits_and_stops_when_removed() {
+    fn a_serve_restarts_when_its_binary_changes_and_after_it_exits_holds_when_stopped_and_stops_when_removed() {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("sleepy");
@@ -518,6 +570,13 @@ mod tests {
         RUNS.lock().unwrap().get_mut("sleepy").unwrap().retry_at = Instant::now();
         supervise(&list);
         assert!(pid().is_some_and(|p| p != second), "started again");
+        // stopped by hand: not started again until it is started
+        stop_server(&list[0]).unwrap();
+        supervise(&list);
+        assert_eq!(pid(), None, "held");
+        // its server never answers (port 1), so starting it waits it out and says so, but it runs
+        assert!(start_server(&list[0]).is_err());
+        assert!(pid().is_some(), "started");
         // removed: its serve stopped first, and it is no longer listed
         let third = pid().unwrap();
         uninstall(&list[0]).unwrap();
