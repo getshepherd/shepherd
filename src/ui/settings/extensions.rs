@@ -185,7 +185,7 @@ impl SettingsView {
             .items_center()
             .gap(px(8.))
             .child(div().font_weight(FontWeight::MEDIUM).line_height(px(17.)).child(e.name.clone()))
-            .child(div().size(px(6.)).rounded_full().bg(dot))
+            .child(div().flex_none().size(px(6.)).rounded_full().bg(dot))
             .child(div().text_size(px(12.)).text_color(theme.text_muted).child(state))
             // the release it was installed from
             .children(e.source.as_ref().map(|s| div().text_size(px(12.)).text_color(theme.text_faint).child(s.tag.clone())));
