@@ -27,7 +27,7 @@ pub(super) fn cell_range(cells: &[CellSnapshot], cols: &[usize], chars: Range<us
 }
 
 impl PaneTerminal {
-    pub(super) fn search_marks(&self, lines: &[Vec<CellSnapshot>], cx: &App) -> Vec<(usize, Range<usize>, bool)> {
+    pub(super) fn search_marks(&self, lines: &[std::sync::Arc<Vec<CellSnapshot>>], cx: &App) -> Vec<(usize, Range<usize>, bool)> {
         let Some(search) = &self.search else { return Vec::new() };
         let query: Vec<char> = search.input.read(cx).value().chars().collect();
         // The current hit's row on screen: herdr's lines count from the oldest, the screen's top is `max - offset`.

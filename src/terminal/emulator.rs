@@ -19,6 +19,7 @@
 //!   [`Emulator::feed`] returns them so the panel can write them back.
 
 use std::cell::RefCell;
+use std::sync::Arc;
 
 use ghostty_vt::render::{CellIterator, CursorVisualStyle, Dirty, RowIterator};
 use ghostty_vt::screen::{CellContentTag, CellWide, GridRef, Screen};
@@ -136,7 +137,8 @@ struct Render {
     rows: RowIterator,
     cells: CellIterator,
     /// The rows as last read: a row Ghostty did not mark dirty since is taken from here, not read cell by cell again.
-    lines: Vec<Vec<CellSnapshot>>,
+    /// Shared with the frames that read them, so a clean row is not copied.
+    lines: Vec<Arc<Vec<CellSnapshot>>>,
 }
 
 /// The selection being made: its granularity and where it started.
@@ -465,15 +467,15 @@ impl Emulator {
     /// Snapshot one viewport row (0 = top).
     // ponytail: snapshots the whole viewport; only hover and tests ask for one row.
     pub fn line(&self, viewport_row: usize) -> Vec<CellSnapshot> {
-        self.lines().into_iter().nth(viewport_row).unwrap_or_default()
+        self.lines().into_iter().nth(viewport_row).map(Arc::unwrap_or_clone).unwrap_or_default()
     }
 
-    /// All viewport rows, top to bottom.
-    pub fn lines(&self) -> Vec<Vec<CellSnapshot>> {
+    /// All viewport rows, top to bottom. A row that has not changed since the last read is the same `Arc`.
+    pub fn lines(&self) -> Vec<Arc<Vec<CellSnapshot>>> {
         self.read_lines().unwrap_or_default()
     }
 
-    fn read_lines(&self) -> Result<Vec<Vec<CellSnapshot>>, Error> {
+    fn read_lines(&self) -> Result<Vec<Arc<Vec<CellSnapshot>>>, Error> {
         let mut render = self.render.borrow_mut();
         let Render { state, rows, cells, lines: cache } = &mut *render;
         let plain = Style::default();
@@ -486,8 +488,11 @@ impl Emulator {
                 let selected = row.selection()?.map(|s| s.start_x..=s.end_x);
                 // the selection is taken afresh for a clean row too: a changed one may leave the row clean
                 if let Some(mut line) = cache.get(lines.len()).filter(|l| !full && l.len() == self.cols() && !row.dirty().unwrap_or(true)).cloned() {
-                    for (col, cell) in line.iter_mut().enumerate() {
-                        cell.selected = selected.as_ref().is_some_and(|r| r.contains(&(col as u16)));
+                    let in_selection = |col: usize| selected.as_ref().is_some_and(|r| r.contains(&(col as u16)));
+                    if line.iter().enumerate().any(|(col, cell)| cell.selected != in_selection(col)) {
+                        for (col, cell) in Arc::make_mut(&mut line).iter_mut().enumerate() {
+                            cell.selected = in_selection(col);
+                        }
                     }
                     lines.push(line);
                     continue;
@@ -535,7 +540,7 @@ impl Emulator {
                         selected: selected.as_ref().is_some_and(|r| r.contains(&col)),
                     });
                 }
-                lines.push(line);
+                lines.push(Arc::new(line));
             }
         }
         snapshot.clean()?;

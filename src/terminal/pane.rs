@@ -44,7 +44,7 @@ pub struct GridGeometry {
 }
 
 pub struct GridSnapshot {
-    pub lines: Vec<Vec<CellSnapshot>>,
+    pub lines: Vec<std::sync::Arc<Vec<CellSnapshot>>>,
     pub cursor: Option<CursorSnapshot>,
     /// Search matches on screen: (row, cells, the current one).
     pub marks: Vec<(usize, Range<usize>, bool)>,
@@ -666,7 +666,7 @@ impl PaneTerminal {
         let mut lines = self.emulator.lines();
         if let Some((row, cells)) = &self.hover {
             // The hover was found on an older grid; output or a resize since may have shortened the row.
-            for cell in lines.get_mut(*row).and_then(|l| l.get_mut(cells.clone())).into_iter().flatten() {
+            for cell in lines.get_mut(*row).and_then(|l| std::sync::Arc::make_mut(l).get_mut(cells.clone())).into_iter().flatten() {
                 cell.underline = true;
             }
         }

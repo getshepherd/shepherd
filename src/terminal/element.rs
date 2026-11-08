@@ -1004,7 +1004,7 @@ struct RowCache {
 
 /// One row's cells, laid out for paint at any height.
 struct RowLayout {
-    cells: Vec<CellSnapshot>,
+    cells: Arc<Vec<CellSnapshot>>,
     /// The block cursor's column, when it is on this row: its cell is shaped apart, in the background's color.
     cursor: Option<usize>,
     /// Non-default backgrounds: runs of columns and their color.
@@ -1017,7 +1017,7 @@ struct RowLayout {
 
 impl RowLayout {
     fn new(
-        cells: &[CellSnapshot],
+        cells: &Arc<Vec<CellSnapshot>>,
         cursor: Option<(usize, Hsla)>,
         theme: &Theme,
         mono: &gpui::Font,
@@ -1049,14 +1049,15 @@ impl RowLayout {
         }
         let mut glyphs = Vec::new();
         let lines = shape_row(cells, theme, mono, font_size, cell_w, cursor, &mut glyphs, window);
-        Self { cells: cells.to_vec(), cursor: cursor.map(|(col, _)| col), bg, lines, glyphs }
+        Self { cells: cells.clone(), cursor: cursor.map(|(col, _)| col), bg, lines, glyphs }
     }
 
     /// The old row that row `ix` is laid out as, if one has its cells. `shift` is the offset from the last row
     /// found to its old one, tried first: a scroll moves every row by the same lines, so the search is the
     /// exception.
-    fn find<'a>(old: &'a [Rc<Self>], ix: usize, cells: &[CellSnapshot], cursor: Option<usize>, shift: &mut isize) -> Option<&'a Rc<Self>> {
-        let same = |row: &&Rc<Self>| row.cursor == cursor && row.cells == cells;
+    fn find<'a>(old: &'a [Rc<Self>], ix: usize, cells: &Arc<Vec<CellSnapshot>>, cursor: Option<usize>, shift: &mut isize) -> Option<&'a Rc<Self>> {
+        // an unchanged row is the very `Arc` the emulator gave last frame
+        let same = |row: &&Rc<Self>| row.cursor == cursor && (Arc::ptr_eq(&row.cells, cells) || row.cells == *cells);
         let guess = ix.checked_add_signed(*shift).and_then(|j| old.get(j)).filter(same);
         guess.or_else(|| {
             let j = old.iter().position(|row| same(&row))?;
@@ -1432,19 +1433,21 @@ mod tests {
             emu.feed(text.as_bytes());
             emu.line(0)
         };
-        let laid = |cells: Vec<CellSnapshot>, cursor| Rc::new(RowLayout { cells, cursor, bg: Vec::new(), lines: Vec::new(), glyphs: Vec::new() });
+        let laid = |cells: Vec<CellSnapshot>, cursor| Rc::new(RowLayout { cells: Arc::new(cells), cursor, bg: Vec::new(), lines: Vec::new(), glyphs: Vec::new() });
         let old: Vec<_> = ["a", "b", "c", "d"].map(|t| laid(row(t), None)).into();
         // scrolled one line back: "z" is new, the rest moved down a row
         let mut shift = 0;
         let found: Vec<_> = ["z", "a", "b", "c"]
             .iter()
             .enumerate()
-            .map(|(ix, t)| RowLayout::find(&old, ix, &row(t), None, &mut shift).map(|r| old.iter().position(|o| Rc::ptr_eq(o, r)).unwrap()))
+            .map(|(ix, t)| RowLayout::find(&old, ix, &Arc::new(row(t)), None, &mut shift).map(|r| old.iter().position(|o| Rc::ptr_eq(o, r)).unwrap()))
             .collect();
         assert_eq!(found, [None, Some(0), Some(1), Some(2)]);
         assert_eq!(shift, -1);
         // the block cursor on a row shapes it apart
-        assert!(RowLayout::find(&old, 0, &row("a"), Some(0), &mut 0).is_none());
+        assert!(RowLayout::find(&old, 0, &Arc::new(row("a")), Some(0), &mut 0).is_none());
+        // a pane that did not change hands back the same rows
+        assert!(RowLayout::find(&old, 3, &old[3].cells, None, &mut 0).is_some_and(|r| Rc::ptr_eq(r, &old[3])));
     }
 
     #[test]

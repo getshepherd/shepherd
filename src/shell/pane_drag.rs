@@ -30,7 +30,7 @@ pub(super) struct DraggedPane {
 /// The pane's grid at the drag's start, and where the pointer took hold of the grip.
 #[derive(Clone)]
 struct Preview {
-    lines: Rc<Vec<Vec<CellSnapshot>>>,
+    lines: Rc<Vec<std::sync::Arc<Vec<CellSnapshot>>>>,
     cell: Size<f32>,
     grab: Point<Pixels>,
 }
