@@ -109,6 +109,14 @@ pub(super) enum Favicon {
     None,
 }
 
+/// A page's key in [`crate::web::Seen`]: its entry's id, and its machine's after an `@`.
+fn seen_key(key: &PageKey) -> String {
+    match &key.1 {
+        Some(machine) => format!("{}@{machine}", key.0),
+        None => key.0.clone(),
+    }
+}
+
 /// The live pages and which one is shown.
 #[derive(Default)]
 pub(super) struct Pages {
@@ -120,6 +128,9 @@ pub(super) struct Pages {
     /// Each page's favicon (a machine's page has its own) and the URL it was fetched for; in memory only, so fetched
     /// again each launch.
     pub(super) favicons: HashMap<PageKey, (String, Favicon)>,
+    /// The titles sidebar pages had in earlier launches ([`crate::web::Seen`]), with the URL each was seen at: a page
+    /// not loaded goes by its last title rather than its address.
+    pub(super) seen_titles: HashMap<PageKey, (String, String)>,
     /// Where pages keep their cookies and storage between launches; macOS keeps WKWebView's default store.
     context: Option<wry::WebContext>,
     pub(super) events: Option<UnboundedSender<(PageKey, u64, PageEvent)>>,
@@ -177,8 +188,25 @@ impl Shell {
             if self.pages.favicons.get(&key).is_some_and(|(fetched, _)| *fetched == url) {
                 continue;
             }
-            self.fetch_favicon(key, url.clone(), url, cx);
+            // what it showed last time, until it shows something now: its server may not be up
+            // ponytail: read on the main thread, once per entry and URL; two small files
+            let seen = crate::web::Seen::default();
+            if let Some(title) = seen.title(&seen_key(&key), &url) {
+                self.pages.seen_titles.insert(key.clone(), (url.clone(), title));
+            }
+            let kept = seen.icon(&seen_key(&key), &url);
+            self.fetch_favicon(key.clone(), url.clone(), url.clone(), cx);
+            if let Some((format, bytes)) = kept {
+                self.pages.favicons.insert(key, (url, Favicon::Image(Arc::new(gpui::Image::from_bytes(format, bytes)))));
+            }
         }
+    }
+
+    /// The title entry page `key` had last, here or in an earlier launch.
+    pub(super) fn page_title(&self, key: &PageKey, url: &str) -> Option<&str> {
+        self.pages.live.get(key).and_then(|p| p.title.as_deref()).or_else(|| {
+            self.pages.seen_titles.get(key).filter(|(seen, _)| seen == url).map(|(_, title)| title.as_str())
+        })
     }
 
     /// Fetches page `key`'s favicon from `from` (its URL, or its forward's), kept as the icon of its URL `url`.
@@ -190,10 +218,19 @@ impl Shell {
             let _ = this.update(cx, |s, cx| {
                 // an edit since asked for another URL's icon
                 let Some((_, slot)) = s.pages.favicons.get_mut(&key).filter(|(u, _)| *u == url) else { return };
-                *slot = match icon {
-                    Some((format, bytes)) => Favicon::Image(Arc::new(gpui::Image::from_bytes(format, bytes))),
-                    None => Favicon::None,
-                };
+                match icon {
+                    Some((format, bytes)) => {
+                        *slot = Favicon::Image(Arc::new(gpui::Image::from_bytes(format, bytes.clone())));
+                        // a sidebar entry's is kept for the launches its server isn't up
+                        if sidebar_entries(cx).iter().any(|e| e.id == key.0) {
+                            let (mark, url) = (seen_key(&key), url.clone());
+                            cx.background_spawn(async move { crate::web::Seen::default().keep_icon(&mark, &url, &bytes) }).detach();
+                        }
+                    }
+                    // the one kept from an earlier launch stays
+                    None if matches!(slot, Favicon::Image(_)) => {}
+                    None => *slot = Favicon::None,
+                }
                 cx.notify();
             });
         })
@@ -562,7 +599,18 @@ impl Shell {
     fn page_event(&mut self, key: PageKey, serial: u64, event: PageEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(page) = self.pages.live.get_mut(&key).filter(|p| p.serial == serial) else { return };
         match event {
-            PageEvent::Title(title) => page.title = Some(title).filter(|t| !t.is_empty()),
+            PageEvent::Title(title) => {
+                page.title = Some(title).filter(|t| !t.is_empty());
+                // a sidebar entry's is kept, for when its page isn't loaded
+                let seen = self.pages.seen_titles.get(&key).map(|(u, t)| (u.as_str(), t.as_str()));
+                if let Some(title) = page.title.clone().filter(|t| seen != Some((page.entry_url.as_str(), t.as_str())))
+                    && sidebar_entries(cx).iter().any(|e| e.id == key.0)
+                {
+                    let (mark, url) = (seen_key(&key), page.entry_url.clone());
+                    self.pages.seen_titles.insert(key.clone(), (url.clone(), title.clone()));
+                    cx.background_spawn(async move { crate::web::Seen::default().keep_title(&mark, &url, &title) }).detach();
+                }
+            }
             PageEvent::Load(started) => page.loading = started,
             PageEvent::Outside(url) => crate::ui::open_outside(&url, cx),
             // dispatched as if pressed in Shepherd; a menu or dialog it opens takes the keyboard in `sync_pages`
@@ -819,7 +867,7 @@ impl Shell {
         let page = self.pages.live.get(key);
         let view = page.map(|p| p.view.clone());
         let can = |f: fn(&wry::WebView) -> wry::Result<bool>| view.as_deref().is_some_and(|v| f(v).unwrap_or(false));
-        let title = page.and_then(|p| p.title.clone()).unwrap_or_else(|| label(entry, None));
+        let title = label(entry, self.page_title(key, &normalize(&entry.url)));
         div()
             .h(px(TITLEBAR_HEIGHT))
             .flex_none()
@@ -1042,7 +1090,7 @@ impl Shell {
             .into_iter()
             .map(|e| {
                 let key = self.page_key(&e);
-                let name = label(&e, self.pages.live.get(&key).and_then(|p| p.title.as_deref()));
+                let name = label(&e, self.page_title(&key, &normalize(&e.url)));
                 let selected = shown.as_deref() == Some(e.id.as_str());
                 // a page not opened yet, or unloaded, is dimmed
                 let loaded = self.pages.live.contains_key(&key) || self.pages.forwards.contains_key(&key);

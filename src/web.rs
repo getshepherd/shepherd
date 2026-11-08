@@ -138,6 +138,71 @@ pub fn fetch_favicon(page: &str) -> Option<(ImageFormat, Vec<u8>)> {
     Some((image_format(&bytes)?, bytes))
 }
 
+/// What a sidebar page last showed, kept across launches in Shepherd's cache folder: its title and its favicon, so a
+/// page whose server isn't up still goes by them rather than by its address and a letter. Each is kept for the URL it
+/// was seen at, and a page on a machine apart from the same entry here: an edited URL starts afresh.
+pub struct Seen {
+    dir: std::path::PathBuf,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct SeenRecord {
+    url: String,
+    title: Option<String>,
+}
+
+impl Default for Seen {
+    /// In Shepherd's cache folder.
+    fn default() -> Seen {
+        Seen { dir: crate::settings::cache_dir().join("pages") }
+    }
+}
+
+impl Seen {
+
+    /// `key` is the entry's id, with `@machine` for a page opened on one.
+    fn path(&self, key: &str, ext: &str) -> std::path::PathBuf {
+        let name: String = key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+        self.dir.join(format!("{name}.{ext}"))
+    }
+
+    fn record(&self, key: &str, url: &str) -> Option<SeenRecord> {
+        let text = std::fs::read_to_string(self.path(key, "json")).ok()?;
+        serde_json::from_str::<SeenRecord>(&text).ok().filter(|r| r.url == url)
+    }
+
+    pub fn title(&self, key: &str, url: &str) -> Option<String> {
+        self.record(key, url)?.title
+    }
+
+    pub fn icon(&self, key: &str, url: &str) -> Option<(ImageFormat, Vec<u8>)> {
+        self.record(key, url)?;
+        let bytes = std::fs::read(self.path(key, "icon")).ok()?;
+        Some((image_format(&bytes)?, bytes))
+    }
+
+    /// The record for `url`, a new one (and the old icon gone) when it was kept for another.
+    fn at(&self, key: &str, url: &str) -> std::io::Result<SeenRecord> {
+        std::fs::create_dir_all(&self.dir)?;
+        Ok(self.record(key, url).unwrap_or_else(|| {
+            let _ = std::fs::remove_file(self.path(key, "icon"));
+            SeenRecord { url: url.into(), title: None }
+        }))
+    }
+
+    pub fn keep_title(&self, key: &str, url: &str, title: &str) -> std::io::Result<()> {
+        let mut record = self.at(key, url)?;
+        record.title = Some(title.into());
+        std::fs::write(self.path(key, "json"), serde_json::to_string(&record)?)
+    }
+
+    pub fn keep_icon(&self, key: &str, url: &str, bytes: &[u8]) -> std::io::Result<()> {
+        let record = self.at(key, url)?;
+        std::fs::write(self.path(key, "json"), serde_json::to_string(&record)?)?;
+        std::fs::write(self.path(key, "icon"), bytes)
+    }
+}
+
 /// Whether something replies on local `port`: an SSH forward takes a connection even when nothing listens on the
 /// machine, and closes it unanswered. Blocking, 5 s at most.
 pub fn answers(port: u16) -> bool {
@@ -236,6 +301,25 @@ pub fn edit_action(mods: Mods, characters: &str) -> Option<&'static std::ffi::CS
 mod tests {
     use super::*;
     use crate::settings::WebEntry;
+
+    #[test]
+    fn a_pages_title_and_icon_are_kept_for_its_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = Seen { dir: dir.path().join("pages") };
+        let (url, png) = ("http://127.0.0.1:4317/", [0x89, b'P', b'N', b'G', 1, 2, 3]);
+        assert_eq!(seen.title("ext:board", url), None, "nothing kept yet");
+        seen.keep_title("ext:board", url, "Board").unwrap();
+        seen.keep_icon("ext:board", url, &png).unwrap();
+        assert_eq!(seen.title("ext:board", url).as_deref(), Some("Board"));
+        assert_eq!(seen.icon("ext:board", url), Some((ImageFormat::Png, png.to_vec())));
+        assert_eq!(seen.title("ext:board@m1", url), None, "a machine's page is its own");
+
+        // the entry's URL edited: what was kept was another page's
+        assert_eq!(seen.title("ext:board", "http://127.0.0.1:9000/"), None);
+        seen.keep_title("ext:board", "http://127.0.0.1:9000/", "Other").unwrap();
+        assert_eq!(seen.icon("ext:board", "http://127.0.0.1:9000/"), None, "the old icon went with it");
+        assert_eq!(seen.title("ext:board", url), None);
+    }
 
     #[test]
     fn an_entry_without_a_name_goes_by_its_pages_title_else_its_host() {
