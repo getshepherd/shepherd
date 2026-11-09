@@ -35,6 +35,25 @@ pub(super) fn damped_spring(zeta: f32, t: f32) -> f32 {
 
 pub(super) const SPRING_DURATION: Duration = Duration::from_millis(240);
 
+/// A place going from `from` to `to` since `at` on a [`spring`] that lasts as long as its user says: a reordered
+/// row's top, a tab's tile's slot.
+#[derive(Clone, Copy)]
+pub(super) struct Slide {
+    pub(super) from: f32,
+    pub(super) to: f32,
+    pub(super) at: Instant,
+}
+
+impl Slide {
+    pub(super) fn now(&self, now: Instant, over: Duration) -> f32 {
+        self.from + (self.to - self.from) * spring(now.saturating_duration_since(self.at).as_secs_f32() / over.as_secs_f32())
+    }
+
+    pub(super) fn done(&self, now: Instant, over: Duration) -> bool {
+        now.saturating_duration_since(self.at) >= over
+    }
+}
+
 /// Zeron's resize-edge spring (`motion::resize_bounce_offset`): 5 px out over the first 32 % of 220 ms, then
 /// home over the rest, smoothstep both ways.
 pub(super) const EDGE_SPRING: Duration = Duration::from_millis(220);

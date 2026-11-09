@@ -26,6 +26,8 @@ const TILE_H: f32 = 16.;
 /// How far each tile of a stack sits right of the one over it, and the gap the bar's color cuts around it.
 const STACK_STEP: f32 = 15.;
 const STACK_RING: f32 = 1.5;
+/// A stack's tile springing to its new slot, as when another pane takes the focus and its tile comes to the top.
+const TILE_SPRING: Duration = SPRING_DURATION;
 /// The trailing slot: the status dot, swapped in place for `×` while the tab is hovered.
 const SLOT: f32 = 20.;
 const ZOOM_MARK: f32 = 12.;
@@ -107,6 +109,8 @@ pub(super) struct Placed {
     selected: bool,
     /// In a drag: a placeholder keeps its gap and the ghost carries the tab.
     holding: bool,
+    /// Where each of its marks is drawn now, in tile steps from the stack's left.
+    tiles: Vec<f32>,
 }
 
 #[derive(Clone)]
@@ -116,11 +120,13 @@ pub(super) struct Entry {
     pub(super) exit: Option<Instant>,
     /// Where it is drawn: content x.
     drawn: f32,
+    /// Its stack's tiles on their way to their slots.
+    tiles: Springs,
 }
 
 impl Entry {
     fn new(tab: Tab, enter: Option<Instant>) -> Self {
-        Entry { tab, enter, exit: None, drawn: 0. }
+        Entry { tab, enter, exit: None, drawn: 0., tiles: Springs::new() }
     }
 
     /// How far the tab is in: 0 collapsed, 1 full width.
@@ -357,14 +363,18 @@ impl Tabs {
                 self.revealed = shown.map(str::to_string);
             }
         }
-        if self.entries.iter().any(|e| e.moving(now)) {
-            window.request_animation_frame();
-        }
-        self.entries
-            .iter()
+        let mut moving = self.entries.iter().any(|e| e.moving(now));
+        let placed = self
+            .entries
+            .iter_mut()
             .zip(layout)
             .map(|(e, (slot_x, _, presence))| {
                 let closing = e.exit.is_some();
+                let tiles = match &e.tab.leading {
+                    Leading::Marks(marks) => spring_tiles(&mut e.tiles, marks, now),
+                    _ => (Vec::new(), false),
+                };
+                moving |= tiles.1;
                 Placed {
                     tab: e.tab.clone(),
                     shift: e.drawn - slot_x,
@@ -372,9 +382,14 @@ impl Tabs {
                     closing,
                     selected: !closing && shown == Some(e.tab.id.as_str()),
                     holding: lifted.as_deref() == Some(e.tab.id.as_str()),
+                    tiles: tiles.0,
                 }
             })
-            .collect()
+            .collect();
+        if moving {
+            window.request_animation_frame();
+        }
+        placed
     }
 
     /// Lets `el`, tab `p`, be dragged along the strip; `dropped` lands it.
@@ -389,14 +404,54 @@ impl Tabs {
     }
 }
 
+/// A stack's tiles in motion, each by its mark and how many alike come before it, with the slot it is going to.
+// ponytail: tiles alike are told apart by their place, not their pane: two alike swapping look the same. Pane ids
+// as keys if they ever differ (a badge on one).
+type Springs = HashMap<(&'static str, usize), (Slide, usize)>;
+
+/// Where each of `marks` is drawn now, in tile steps from the stack's left, and whether any still moves: a tile that
+/// has a new slot springs to it from where it is, one that wasn't in the stack comes from its last slot (a pane past
+/// [`MAX_MARKS`] focused, a new pane), and a stack seen for the first time is drawn at rest.
+fn spring_tiles(springs: &mut Springs, marks: &[Mark], now: Instant) -> (Vec<f32>, bool) {
+    let mut alike: HashMap<&str, usize> = HashMap::new();
+    let keys: Vec<(&'static str, usize)> = marks
+        .iter()
+        .map(|(icon, _)| {
+            let n = alike.entry(icon).or_default();
+            *n += 1;
+            (*icon, *n - 1)
+        })
+        .collect();
+    let first = springs.is_empty();
+    let last = marks.len().saturating_sub(1);
+    let mut moving = false;
+    let at = keys
+        .iter()
+        .enumerate()
+        .map(|(slot, key)| {
+            let to = slot as f32;
+            let start = if first { slot } else { last };
+            let (slide, was) = springs.entry(*key).or_insert((Slide { from: start as f32, to: start as f32, at: now }, start));
+            if *was != slot {
+                *slide = Slide { from: slide.now(now, TILE_SPRING), to, at: now };
+                *was = slot;
+            }
+            moving |= slide.from != slide.to && !slide.done(now, TILE_SPRING);
+            slide.now(now, TILE_SPRING)
+        })
+        .collect();
+    springs.retain(|k, _| keys.contains(k));
+    (at, moving)
+}
+
 /// The favicon: the mark on a filled tile of its color, the same size for every kind; with more marks, a stack.
-fn leading(t: &Tab, ring: Hsla, theme: &Theme, window: &mut Window) -> AnyElement {
+fn leading(t: &Tab, tiles: &[f32], ring: Hsla, theme: &Theme, window: &mut Window) -> AnyElement {
     // the tile's room, so a label starts in the same place whatever leads it
     let slot = || div().w(px(TILE_W)).h(px(TILE_H)).flex_none().flex().items_center().justify_center();
     match &t.leading {
         Leading::Marks(marks) => match marks.as_slice() {
             [(icon, tint)] => tile(icon, *tint).into_any_element(),
-            marks => stack(marks, ring).into_any_element(),
+            marks => stack(marks, tiles, ring).into_any_element(),
         },
         Leading::Image(image) => slot().child(gpui::img(image.clone()).size(px(16.)).rounded(px(3.))).into_any_element(),
         Leading::Spinner => slot().child(crate::ui::loader::mini_spinner(2., theme.text_faint, window)).into_any_element(),
@@ -404,11 +459,13 @@ fn leading(t: &Tab, ring: Hsla, theme: &Theme, window: &mut Window) -> AnyElemen
     }
 }
 
-/// A tab's tiles overlapped, the first on top, each in a `ring` of what's behind them.
-fn stack(marks: &[Mark], ring: Hsla) -> Div {
+/// A tab's tiles overlapped, the first on top, each in a `ring` of what's behind them, and drawn `at` its tiles' x
+/// (in steps; its slot without one). A tile springing to the top is drawn on top all the way, over those it passes.
+fn stack(marks: &[Mark], at: &[f32], ring: Hsla) -> Div {
     let more = marks.len().saturating_sub(1) as f32;
     div().relative().flex_none().w(px(TILE_W + more * STACK_STEP)).h(px(TILE_H)).children(marks.iter().enumerate().rev().map(|(i, (icon, tint))| {
-        div().absolute().left(px(i as f32 * STACK_STEP - STACK_RING)).top(px(-STACK_RING)).p(px(STACK_RING)).rounded(px(5. + STACK_RING)).bg(ring).child(tile(icon, *tint))
+        let x = at.get(i).copied().unwrap_or(i as f32);
+        div().absolute().left(px(x * STACK_STEP - STACK_RING)).top(px(-STACK_RING)).p(px(STACK_RING)).rounded(px(5. + STACK_RING)).bg(ring).child(tile(icon, *tint))
     }))
 }
 
@@ -455,7 +512,7 @@ pub(super) fn tab_chip(mark: Mark, label: SharedString, theme: &Theme) -> Div {
 }
 
 /// A tab's face at full width: favicon, label, trailing slot.
-fn face(theme: &Theme, t: &Tab, width: f32, selected: bool, window: &mut Window) -> Div {
+fn face(theme: &Theme, t: &Tab, tiles: &[f32], width: f32, selected: bool, window: &mut Window) -> Div {
     // ponytail: a hovered tab's wash and a dragged tab's card differ a shade from this; the group hover can follow if it shows
     let ring = if selected { theme.surface.blend(theme.selected) } else { theme.surface };
     div()
@@ -471,7 +528,7 @@ fn face(theme: &Theme, t: &Tab, width: f32, selected: bool, window: &mut Window)
         .font_family(theme.font_ui.clone())
         .text_size(px(FONT_SIZE))
         .text_color(if selected { theme.text } else { theme.text_muted })
-        .child(leading(t, ring, theme, window))
+        .child(leading(t, tiles, ring, theme, window))
 }
 
 /// The trailing slot: the status dot, if any.
@@ -494,7 +551,7 @@ impl Render for DraggedTab {
         // gpui draws the ghost at the pointer less the grab: remember it, the held tab's gap follows it
         *self.drag.borrow_mut() = Some((self.tab.id.clone(), window.mouse_position() - self.grab));
         let theme = &self.theme;
-        face(theme, &self.tab, self.tab.width, true, window)
+        face(theme, &self.tab, &[], self.tab.width, true, window)
             .bg(theme.card)
             .border_1()
             .border_color(theme.border)
@@ -522,7 +579,7 @@ pub(super) fn tab_element(
     let group = SharedString::from(format!("tab-row-{}", t.id));
     let middle = on_close.clone();
     // The face keeps its full width and is clipped while the tab grows or shrinks.
-    let content = face(theme, t, full_w, selected, window)
+    let content = face(theme, t, &p.tiles, full_w, selected, window)
         .map(|el| match editing {
             Some(field) => el.child(field),
             None => el.child(div().flex_1().min_w_0().truncate().child(name_text(t, theme))),
@@ -636,6 +693,27 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tile_taking_the_top_springs_there_and_the_others_make_room() {
+        let tint = (gpui::black(), gpui::white());
+        let marks = |icons: &[&'static str]| icons.iter().map(|i| (*i, tint)).collect::<Vec<Mark>>();
+        let mut springs = Springs::new();
+        let now = Instant::now();
+        // first seen: at rest, nothing to redraw
+        assert_eq!(spring_tiles(&mut springs, &marks(&["a", "b", "c"]), now), (vec![0., 1., 2.], false));
+        // c takes the focus: it starts where it was, then all are in their new slots
+        let moved = marks(&["c", "a", "b"]);
+        assert_eq!(spring_tiles(&mut springs, &moved, now), (vec![2., 0., 1.], true));
+        assert_eq!(spring_tiles(&mut springs, &moved, now + TILE_SPRING), (vec![0., 1., 2.], false));
+        // a tile from past the cap comes from the last slot, the one it pushes out goes
+        let (at, moving) = spring_tiles(&mut springs, &marks(&["d", "c", "a"]), now + TILE_SPRING);
+        assert_eq!((at, moving), (vec![2., 0., 1.], true));
+        assert!(!springs.contains_key(&("b", 0)));
+        // alike tiles are told apart by order: a second one is a tile of its own
+        let (at, _) = spring_tiles(&mut springs, &marks(&["d", "d", "c"]), now + TILE_SPRING * 3);
+        assert_eq!(at.len(), 3);
+    }
 
     fn tab(id: &str) -> Tab {
         Tab { id: id.into(), label: id.into(), name: (id.into(), Vec::new()), leading: Leading::Spinner, status: None, zoomed: false, width: 100. }

@@ -1,7 +1,7 @@
 //! A list of rows reordered by dragging, as the place bar's buttons are: the row lifts and follows the pointer, a
 //! placeholder holds the slot it would land in, the others spring around it, and let go of, it flies into its slot.
 //! Rows may differ in height (a worktree group, unfolded): each is measured as it is painted.
-use super::motion::spring;
+use super::motion::Slide;
 use super::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -21,24 +21,6 @@ pub(super) struct DraggedRow {
 impl Render for DraggedRow {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
-    }
-}
-
-/// A row's top in the list going from `from` to `to` since `at`.
-#[derive(Clone, Copy)]
-struct Slide {
-    from: f32,
-    to: f32,
-    at: Instant,
-}
-
-impl Slide {
-    fn now(&self, now: Instant) -> f32 {
-        self.from + (self.to - self.from) * spring(now.saturating_duration_since(self.at).as_secs_f32() / SLIDE.as_secs_f32())
-    }
-
-    fn done(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.at) >= SLIDE
     }
 }
 
@@ -144,7 +126,7 @@ impl Reorder {
             y += h(k) + gap;
             let (slide, was) = self.slides.entry(k.clone()).or_insert((Slide { from: to, to, at: now }, rank));
             if *was != rank {
-                *slide = Slide { from: slide.now(now), to, at: now };
+                *slide = Slide { from: slide.now(now, SLIDE), to, at: now };
                 *was = rank;
             } else if slide.to != to {
                 // a row above grew or shrank: it moves along, without a spring
@@ -152,10 +134,10 @@ impl Reorder {
                 slide.from += by;
                 slide.to = to;
             }
-            moving |= !slide.done(now);
+            moving |= !slide.done(now, SLIDE);
         }
         self.slides.retain(|k, _| keys.contains(k));
-        if self.landing.as_ref().is_some_and(|k| self.slides.get(k).is_none_or(|(s, _)| s.done(now))) {
+        if self.landing.as_ref().is_some_and(|k| self.slides.get(k).is_none_or(|(s, _)| s.done(now, SLIDE))) {
             self.landing = None;
         }
         let lifted = self.drag.as_ref().map(|d| d.key.clone()).or(self.landing.clone());
@@ -163,7 +145,7 @@ impl Reorder {
         let rows = keys
             .iter()
             .map(|k| {
-                let top = self.slides.get(k).map_or(y, |(s, _)| s.now(now));
+                let top = self.slides.get(k).map_or(y, |(s, _)| s.now(now, SLIDE));
                 let offset = top - y;
                 y += h(k) + gap;
                 let lifted = (lifted.as_ref() == Some(k)).then(|| {
