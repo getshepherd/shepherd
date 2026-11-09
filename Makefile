@@ -16,7 +16,7 @@ NOTARY_PROFILE ?= shepherd-notary
 NOTARY_KEYCHAIN ?=
 export SIGN_IDENTITY
 
-.PHONY: help build run test lint linux linux-test linux-lint linux-shot app app-debug open install universal dist notarize version ghostty-themes deploy-site clean
+.PHONY: help build run test lint linux linux-test linux-lint linux-shot app app-debug open install universal lipo dist notarize version ghostty-themes deploy-site clean
 
 help: ## This list
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-10s %s\n", $$1, $$2}'
@@ -78,6 +78,10 @@ install: app ## Copy the release app to /Applications
 universal: ## Universal (arm64 + x86_64) Shepherd.app in target/universal
 	cargo build --release --target aarch64-apple-darwin
 	cargo build --release --target x86_64-apple-darwin
+	$(MAKE) lipo
+
+# CI builds the two targets on two runners at once and brings both here: `make dist PREBUILT=1` packs those.
+lipo: ## Universal Shepherd.app from both targets' release builds, built already
 	mkdir -p $(DIST)
 	lipo -create -output $(DIST)/shepherd \
 		target/aarch64-apple-darwin/release/shepherd target/x86_64-apple-darwin/release/shepherd
@@ -94,7 +98,7 @@ define make-dmg
 	$(if $(SIGN_IDENTITY),codesign --force --timestamp --sign "$(SIGN_IDENTITY)" $(DMG))
 endef
 
-dist: universal ## Universal zip and dmg in target/universal
+dist: $(if $(PREBUILT),lipo,universal) ## Universal zip and dmg in target/universal (PREBUILT=1: of the builds there)
 	rm -f $(ZIP)
 	ditto -c -k --keepParent $(DIST_APP) $(ZIP)
 	$(make-dmg)
