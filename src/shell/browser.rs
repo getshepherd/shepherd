@@ -28,6 +28,16 @@ pub(super) struct Browser {
     pending: Option<String>,
     /// A blank tab's list of ports has its next look set: it reads again while shown.
     pub(super) ports_tick: bool,
+    /// The bar's `…` menu: the tab it is for, and where it opens.
+    pub(super) menu: Option<crate::ui::Popup<(String, gpui::Point<Pixels>)>>,
+    /// The pages tabs showed, read once a blank tab or a load asks for them.
+    history: Option<crate::web::History>,
+    /// What each tab last put in the history, so its other events don't put it there again.
+    recorded: HashMap<String, (String, Option<String>)>,
+    /// Sites' icons for Recently used, by site (`https://github.com`): `None` while read or fetched, or when none.
+    pub(super) site_icons: HashMap<String, Option<std::sync::Arc<gpui::Image>>>,
+    /// Each tab's page zoom, 1 unless changed in its menu.
+    zoom: HashMap<String, f64>,
 }
 
 struct Address {
@@ -88,8 +98,24 @@ pub(crate) fn open_inside(url: &str, cx: &mut App) {
     }
 }
 
+/// Chrome's zoom levels, which the menu's − and + step through.
+const ZOOMS: [f64; 15] = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1., 1.1, 1.25, 1.5, 1.75, 2., 2.5, 3.];
+
+/// The zoom level after `now`, up or down; the last one at either end.
+fn zoom_step(now: f64, up: bool) -> f64 {
+    let next = match up {
+        true => ZOOMS.iter().find(|z| **z > now + 1e-3),
+        false => ZOOMS.iter().rev().find(|z| **z < now - 1e-3),
+    };
+    next.copied().unwrap_or(now)
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
 /// `https://example.com/a?b` → `https://example.com`: what a tab's favicon is fetched again for.
-fn site(url: &str) -> Option<String> {
+pub(super) fn site(url: &str) -> Option<String> {
     let uri: http::Uri = url.parse().ok()?;
     Some(format!("{}://{}", uri.scheme_str()?, uri.authority()?))
 }
@@ -259,9 +285,245 @@ impl Shell {
     pub(super) fn browser_loaded(&mut self, key: &PageKey, window: &mut Window, cx: &mut Context<Self>) {
         self.show_address(key, window, cx);
         let Some(url) = self.pages.live.get(key).and_then(|p| super::web::page_url(&p.view)) else { return };
+        self.record_visit(key, &url, cx);
         if let Some(site) = site(&url).filter(|s| self.pages.favicons.get(key).is_none_or(|(had, _)| had != s)) {
             self.fetch_favicon(key.clone(), site, url, cx);
         }
+    }
+
+    /// The history, read the first time it is asked for.
+    pub(super) fn history(&mut self) -> &mut crate::web::History {
+        self.browser.history.get_or_insert_with(crate::web::History::load)
+    }
+
+    /// Tab `key` on `url`, its load done: Recently used's first, with the page's title, saved in the background. Not
+    /// while it loads, when the title is still the last page's.
+    fn record_visit(&mut self, key: &PageKey, url: &str, cx: &mut Context<Self>) {
+        let Some(page) = self.pages.live.get(key).filter(|p| !p.loading) else { return };
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return;
+        }
+        let seen = (url.to_string(), page.title.clone());
+        if self.browser.recorded.get(&key.0) == Some(&seen) {
+            return;
+        }
+        self.browser.recorded.insert(key.0.clone(), seen.clone());
+        let history = self.history();
+        if history.record(&seen.0, seen.1.as_deref(), unix_now())
+            && let Some((path, text)) = history.to_save()
+        {
+            cx.background_spawn(async move {
+                let _ = path.parent().map(std::fs::create_dir_all);
+                let _ = std::fs::write(path, text);
+            })
+            .detach();
+        }
+    }
+
+    /// Site `site`'s icon for Recently used: kept from an earlier launch, else fetched once in the background.
+    pub(super) fn site_icon(&mut self, site: &str, cx: &mut Context<Self>) -> Option<std::sync::Arc<gpui::Image>> {
+        if let Some(icon) = self.browser.site_icons.get(site) {
+            return icon.clone();
+        }
+        // ponytail: read on the main thread, once per site a launch; a small file
+        let kept = crate::web::Seen::default().icon(&crate::web::site_key(site), site);
+        let icon = kept.map(|(format, bytes)| std::sync::Arc::new(gpui::Image::from_bytes(format, bytes)));
+        self.browser.site_icons.insert(site.to_string(), icon.clone());
+        if icon.is_none() {
+            let site = site.to_string();
+            let fetched = cx.background_spawn({
+                let site = site.clone();
+                async move {
+                    let (format, bytes) = crate::web::fetch_favicon(&site)?;
+                    let _ = crate::web::Seen::default().keep_icon(&crate::web::site_key(&site), &site, &bytes);
+                    Some(std::sync::Arc::new(gpui::Image::from_bytes(format, bytes)))
+                }
+            });
+            cx.spawn(async move |this, cx| {
+                let icon = fetched.await;
+                let _ = this.update(cx, |s, cx| {
+                    s.browser.site_icons.insert(site, icon);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        icon
+    }
+
+    /// The shown page's inspector opened, or closed if open (⌥⌘I).
+    pub(super) fn toggle_devtools(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(page) = self.visible_page(window, cx).and_then(|key| self.pages.live.get(&key)) else { return };
+        match page.view.is_devtools_open() {
+            true => page.view.close_devtools(),
+            false => page.view.open_devtools(),
+        }
+    }
+
+    /// Tab `id`'s page loaded again bypassing the cache (WebKit's reload from origin).
+    fn hard_reload(&mut self, id: &str) {
+        let key: PageKey = (id.to_string(), None);
+        #[cfg(target_os = "macos")]
+        if let Some(page) = self.pages.live.get(&key) {
+            webkit::reload_from_origin(&page.view);
+        }
+        // ponytail: WebKitGTK's plain reload, which wry alone reaches; its bypass-cache one when someone asks
+        #[cfg(not(target_os = "macos"))]
+        self.reload_page(&key);
+    }
+
+    /// Tab `id`'s page zoomed to `zoom`.
+    fn set_zoom(&mut self, id: &str, zoom: f64) {
+        if let Some(page) = self.pages.live.get(&(id.to_string(), None)) {
+            let _ = page.view.zoom(zoom);
+            self.browser.zoom.insert(id.to_string(), zoom);
+        }
+    }
+
+    /// The shown browser tab's `…` menu opened: `SHEPHERD_PANEL=browser-menu` for a screenshot.
+    pub fn open_browser_menu(&mut self, cx: &mut Context<Self>) {
+        if let Some(Surface::Browser(id)) = self.panel().and_then(|p| p.active.clone()) {
+            self.browser.menu = Some(crate::ui::Popup::new((id, gpui::Point::default())));
+            cx.notify();
+        }
+    }
+
+    fn close_browser_menu(&mut self) {
+        if let Some(m) = self.browser.menu.as_mut() {
+            m.close();
+        }
+    }
+
+    /// The bar's `…` button: its menu, under it.
+    fn menu_button(&self, id: &str, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div> {
+        let open = self.browser.menu.as_ref().is_some_and(|m| m.is_open());
+        let tab = id.to_string();
+        super::web::nav_frame(theme, "browser-menu", true)
+            .relative()
+            .when(open, |el| el.bg(theme.hover))
+            .tooltip(tip("More", None))
+            .child(super::widgets::anchor_probe(&self.anchors, "browser-menu"))
+            .child(gpui::svg().path("icons/solar/menu-dots.svg").size(px(16.)).text_color(theme.text_muted))
+            // capture, as the other menus' triggers: a press on the open menu's button closes it
+            .capture_any_mouse_down(cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                match this.browser.menu.as_mut() {
+                    Some(menu) if menu.is_open() => menu.close(),
+                    _ => {
+                        let at = this.anchors.borrow().get("browser-menu").map_or(e.position, |b| b.bottom_right() + gpui::point(px(0.), px(4.)));
+                        this.browser.menu = Some(crate::ui::Popup::new((tab.clone(), at)));
+                    }
+                }
+                cx.notify();
+            }))
+    }
+
+    /// The `…` menu of a browser tab's bar: Hard reload, DevTools, the zoom, and clearing the site's cookies or cache.
+    pub(super) fn browser_menu(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let menu = self.browser.menu.as_ref()?;
+        let (id, at) = menu.value.clone();
+        // under the button as laid out now: the panel may have moved since the press
+        let at = self.anchors.borrow().get("browser-menu").map_or(at, |b| b.bottom_right() + gpui::point(px(0.), px(4.)));
+        let view = self.pages.live.get(&(id.clone(), None)).map(|p| p.view.clone())?;
+        let url = super::web::page_url(&view).filter(|u| u != BLANK);
+        let zoom = self.browser.zoom.get(&id).copied().unwrap_or(1.);
+        let devtools = view.is_devtools_open();
+        let chord = cx.try_global::<crate::bindings::ActiveBindings>().and_then(|b| b.0.iter().find(|(a, _)| a == "ToggleDevTools").map(|(_, k)| k.clone()));
+        type Pick = Box<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>;
+        let item = |key: &'static str, icon: &'static str, label: &'static str, enabled: bool, pick: Pick| {
+            row(theme, false, key)
+                .h(px(28.))
+                .rounded(px(6.))
+                .when(!enabled, |el| el.opacity(0.4).cursor_default())
+                .child(super::widgets::menu_mark(icon, theme.text_muted))
+                .child(div().flex_1().child(label))
+                .when(enabled, |el| {
+                    el.on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.close_browser_menu();
+                        pick(this, window, cx);
+                        cx.notify();
+                    }))
+                })
+        };
+        let step = |key: &'static str, label: &'static str, to: f64, enabled: bool| {
+            let tab = id.clone();
+            let hover = theme.hover;
+            div()
+                .id(key)
+                .h(px(22.))
+                .min_w(px(22.))
+                .px(px(4.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(5.))
+                .text_color(if enabled { theme.text } else { theme.text_faint })
+                .child(label)
+                .when(enabled, |el| {
+                    el.cursor_pointer().hover(move |s| s.bg(hover)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        // the menu stays open, for the next step
+                        this.set_zoom(&tab, to);
+                        cx.notify();
+                    }))
+                })
+        };
+        let zoom_row = div()
+            .h(px(28.))
+            .px(px(8.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(super::widgets::menu_mark("icons/solar/magnifier-zoom-in.svg", theme.text_muted))
+            .child(div().flex_1().child("Zoom"))
+            .child(step("browser-zoom-out", "−", zoom_step(zoom, false), zoom_step(zoom, false) != zoom))
+            // the level itself resets it
+            .child(step("browser-zoom-reset", "", 1., zoom != 1.).min_w(px(44.)).child(format!("{:.0}%", zoom * 100.)))
+            .child(step("browser-zoom-in", "+", zoom_step(zoom, true), zoom_step(zoom, true) != zoom));
+        // the site's own data only: the pages share one store, and the sidebar's would be signed out too
+        let host = url.as_deref().and_then(|u| u.parse::<http::Uri>().ok()?.host().map(str::to_string));
+        #[cfg(target_os = "macos")]
+        let clears: Vec<gpui::AnyElement> = host.map_or(Vec::new(), |host| {
+            let clear = |key: &'static str, icon: &'static str, label: &'static str, kinds: &'static [&'static str], done: &'static str| {
+                let (view, host) = (view.clone(), host.clone());
+                item(key, icon, label, true, Box::new(move |_, _, cx| {
+                    webkit::clear_site_data(&view, kinds, host.clone());
+                    crate::ui::toast::info(cx, format!("{done} {host}"), None);
+                }))
+                .into_any_element()
+            };
+            vec![
+                div().mx(px(-4.)).my(px(4.)).h(px(1.)).bg(theme.border).into_any_element(),
+                clear("browser-clear-cookies", "icons/solar/trash-bin-minimalistic.svg", "Clear cookies", &webkit::COOKIES, "Cleared the cookies of"),
+                clear("browser-clear-cache", "icons/solar/broom.svg", "Clear cache", &webkit::CACHE, "Cleared the cache of"),
+            ]
+        });
+        // ponytail: WebKitGTK's store is cleared whole by wry; per site there, when someone asks
+        #[cfg(not(target_os = "macos"))]
+        let clears: Vec<gpui::AnyElement> = { let _ = host; Vec::new() };
+        let (reload, tools) = (id.clone(), view.clone());
+        let card = menu_card(theme, "browser-menu-card", 240.)
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.close_browser_menu();
+                cx.notify();
+            }))
+            .child(item("browser-hard-reload", "icons/solar/restart.svg", "Hard reload", url.is_some(), Box::new(move |this, _, _| this.hard_reload(&reload))))
+            .child(
+                item(
+                    "browser-devtools",
+                    "icons/solar/code.svg",
+                    if devtools { "Close DevTools" } else { "Open DevTools" },
+                    true,
+                    Box::new(move |_, _, _| match tools.is_devtools_open() {
+                        true => tools.close_devtools(),
+                        false => tools.open_devtools(),
+                    }),
+                )
+                .children(chord.map(|k| div().text_size(px(11.)).text_color(theme.text_faint).child(crate::ui::command_panel::glyphs(&k)))),
+            )
+            .child(zoom_row)
+            .children(clears);
+        let menu = crate::ui::menu_motion("browser-menu-in", menu, card);
+        Some(gpui::deferred(gpui::anchored().position(at).anchor(gpui::Anchor::TopRight).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(1).into_any_element())
     }
 
     /// Tab `id`'s site icon once fetched, and whether its page is loading.
@@ -342,6 +604,7 @@ impl Shell {
                         }
                     }),
             )
+            .child(self.menu_button(&key.0, theme, cx))
     }
 
 }
@@ -373,6 +636,58 @@ fn extension_buttons(_: &Theme) -> Vec<Stateful<Div>> {
     Vec::new()
 }
 
+/// WebKit's own, which wry doesn't reach: reload from origin and a site's data.
+#[cfg(target_os = "macos")]
+mod webkit {
+    use objc2::msg_send;
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::{NSArray, NSSet, NSString};
+    use std::ptr::NonNull;
+    use wry::WebViewExtMacOS;
+
+    /// `WKWebsiteDataType…`: the constants' values are their names.
+    pub(super) const COOKIES: [&str; 1] = ["WKWebsiteDataTypeCookies"];
+    pub(super) const CACHE: [&str; 3] = ["WKWebsiteDataTypeDiskCache", "WKWebsiteDataTypeMemoryCache", "WKWebsiteDataTypeFetchCache"];
+
+    pub(super) fn reload_from_origin(view: &wry::WebView) {
+        // SAFETY: `reloadFromOrigin` on a live WKWebView, on the main thread
+        let _: Option<Retained<AnyObject>> = unsafe { msg_send![&*view.webview(), reloadFromOrigin] };
+    }
+
+    /// Removes the data of `kinds` that WebKit keeps for `host`'s site: the records whose name (the registrable
+    /// domain, `github.com`) is `host` or a domain `host` is under.
+    pub(super) fn clear_site_data(view: &wry::WebView, kinds: &[&str], host: String) {
+        let kinds: Vec<Retained<NSString>> = kinds.iter().map(|k| NSString::from_str(k)).collect();
+        let kinds = NSSet::from_retained_slice(&kinds);
+        // SAFETY: the page's configuration and its data store, on the main thread
+        let store: Retained<AnyObject> = unsafe {
+            let configuration: Retained<AnyObject> = msg_send![&*view.webview(), configuration];
+            msg_send![&configuration, websiteDataStore]
+        };
+        let (from, removed) = (store.clone(), kinds.clone());
+        let found = block2::RcBlock::new(move |records: NonNull<NSArray<AnyObject>>| {
+            // SAFETY: WebKit hands the block a live array of WKWebsiteDataRecords, on the main thread
+            let records = unsafe { records.as_ref() };
+            let ours: Vec<Retained<AnyObject>> = records
+                .iter()
+                .filter(|r| {
+                    // SAFETY: a record's `displayName`
+                    let name: Retained<NSString> = unsafe { msg_send![&**r, displayName] };
+                    let name = name.to_string();
+                    host == name || host.ends_with(&format!(".{name}"))
+                })
+                .collect();
+            let ours = NSArray::from_retained_slice(&ours);
+            let done = block2::RcBlock::new(|| {});
+            // SAFETY: the store's removal of its own records, on the main thread
+            let () = unsafe { msg_send![&from, removeDataOfTypes: &*removed, forDataRecords: &*ours, completionHandler: &*done] };
+        });
+        // SAFETY: as above
+        let () = unsafe { msg_send![&store, fetchDataRecordsOfTypes: &*kinds, completionHandler: &*found] };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,5 +701,13 @@ mod tests {
         assert_eq!(typed_url("rust lifetimes").as_deref(), Some("https://duckduckgo.com/?q=rust%20lifetimes"));
         assert_eq!(typed_url("  "), None);
         assert_eq!(site("https://x.dev:8080/a?b").as_deref(), Some("https://x.dev:8080"));
+    }
+
+    #[test]
+    fn zoom_steps_through_chromes_levels() {
+        assert_eq!(zoom_step(1., true), 1.1);
+        assert_eq!(zoom_step(1., false), 0.9);
+        assert_eq!(zoom_step(3., true), 3., "the last level holds");
+        assert_eq!(zoom_step(0.25, false), 0.25);
     }
 }

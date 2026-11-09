@@ -153,6 +153,7 @@ pub(crate) fn action_icon(name: &str) -> &'static str {
         "AgentsPanel" => "icons/bot.svg",
         "WorkspacesPanel" => "icons/folder.svg",
         "SessionsPanel" => "icons/monitor.svg",
+        "ToggleDevTools" => "icons/solar/code.svg",
         "Quit" => "icons/logout-2.svg",
         _ => "icons/terminal.svg",
     }

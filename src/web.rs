@@ -213,6 +213,76 @@ impl Seen {
     }
 }
 
+/// The [`Seen`] key a site's icon is kept under (`https://github.com` → `site-https___github_com`): a browser tab's
+/// page is any site's, not an entry's.
+pub fn site_key(site: &str) -> String {
+    format!("site-{site}")
+}
+
+/// A page a browser tab showed: what a blank tab's Recently used lists.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+pub struct Visit {
+    pub url: String,
+    pub title: Option<String>,
+    /// When it was last shown, in seconds since the Unix epoch.
+    pub at: u64,
+}
+
+/// Browser tabs' history, newest first, one visit per URL, kept beside [`Seen`]'s pages.
+pub struct History {
+    path: Option<std::path::PathBuf>,
+    pub visits: Vec<Visit>,
+}
+
+/// How many visits are kept.
+const HISTORY_CAP: usize = 100;
+
+impl History {
+    /// Read from Shepherd's cache folder. `SHEPHERD_MOCK`'s fixture brings its own, which is only read: browsing in a
+    /// screenshot's Shepherd doesn't touch the checkout.
+    pub fn load() -> History {
+        let (read, path) = match std::env::var_os("SHEPHERD_MOCK") {
+            Some(mock) => (std::path::Path::new(&mock).join("browser-history.json"), None),
+            None => {
+                let path = crate::settings::cache_dir().join("pages").join("history.json");
+                (path.clone(), Some(path))
+            }
+        };
+        let visits = std::fs::read_to_string(read).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        History { path, visits }
+    }
+
+    /// `url` shown with `title` at `at`: first in the list, its earlier visit gone. Whether anything changed.
+    pub fn record(&mut self, url: &str, title: Option<&str>, at: u64) -> bool {
+        let title = title.map(str::trim).filter(|t| !t.is_empty()).map(String::from);
+        if let Some(first) = self.visits.first_mut().filter(|v| v.url == url) {
+            // a title arriving after its load: the visit's time stays
+            if title.is_none() || first.title == title {
+                return false;
+            }
+            first.title = title;
+            return true;
+        }
+        self.visits.retain(|v| v.url != url);
+        self.visits.insert(0, Visit { url: url.into(), title, at });
+        self.visits.truncate(HISTORY_CAP);
+        true
+    }
+
+    /// What to write, and where; `None` for a fixture's.
+    pub fn to_save(&self) -> Option<(std::path::PathBuf, String)> {
+        Some((self.path.clone()?, serde_json::to_string(&self.visits).ok()?))
+    }
+}
+
+/// `5h ago` and the like, for a visit at `at` seen at `now` (seconds since the epoch).
+pub fn visited_ago(at: u64, now: u64) -> String {
+    match crate::model::ago(std::time::Duration::from_secs(now.saturating_sub(at))).as_str() {
+        "now" => "just now".into(),
+        ago => format!("{ago} ago"),
+    }
+}
+
 /// Whether something replies on local `port`: an SSH forward takes a connection even when nothing listens on the
 /// machine, and closes it unanswered. Blocking, 5 s at most.
 pub fn answers(port: u16) -> bool {
@@ -329,6 +399,22 @@ mod tests {
         seen.keep_title("ext:board", "http://127.0.0.1:9000/", "Other").unwrap();
         assert_eq!(seen.icon("ext:board", "http://127.0.0.1:9000/"), None, "the old icon went with it");
         assert_eq!(seen.title("ext:board", url), None);
+    }
+
+    #[test]
+    fn history_keeps_one_visit_per_url_newest_first() {
+        let mut h = History { path: None, visits: Vec::new() };
+        assert!(h.record("https://a.dev/", None, 10));
+        assert!(h.record("https://a.dev/", Some("A"), 20), "its title arrives after the load");
+        assert_eq!(h.visits[0], Visit { url: "https://a.dev/".into(), title: Some("A".into()), at: 10 });
+        assert!(!h.record("https://a.dev/", Some("A"), 30), "nothing new");
+        assert!(!h.record("https://a.dev/", None, 30), "a title isn't lost to a load without one");
+        assert!(h.record("https://b.dev/", Some("B"), 40));
+        assert!(h.record("https://a.dev/", Some("A"), 50), "visited again: first, at its new time");
+        let urls: Vec<_> = h.visits.iter().map(|v| (v.url.as_str(), v.at)).collect();
+        assert_eq!(urls, [("https://a.dev/", 50), ("https://b.dev/", 40)]);
+        assert_eq!(visited_ago(50, 50 + 5 * 3600), "5h ago");
+        assert_eq!(visited_ago(50, 60), "just now");
     }
 
     #[test]
@@ -514,6 +600,9 @@ mod tests {
         assert_eq!(key(Mods { cmd: true, alt: true, ..Mods::default() }, "\u{F702}"), None);
         // a chord of two keys isn't taken from the page
         assert_eq!(key(Mods { ctrl: true, ..Mods::default() }, "a"), None);
+        // ⌥⌘I, DevTools: WebKit leaves it to the app, which binds it in GPUI's spelling (`alt-cmd-i`)
+        let devtools = [crate::bindings::normalize("cmd-alt-i").unwrap()];
+        assert_eq!(shepherds_key(Mods { cmd: true, alt: true, ..Mods::default() }, "i", &devtools), ks("cmd-alt-i"));
     }
 
     #[test]

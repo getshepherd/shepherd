@@ -557,6 +557,7 @@ impl Shell {
             modal("place-edit", edit, window, card)
         }))
         .children(self.web_menu(theme, cx))
+        .children(self.browser_menu(theme, cx))
         .children(self.right_plus_menu(theme, cx))
         .children(self.device_menu(theme, cx))
         .children(self.device_choice(theme, cx))

@@ -23,6 +23,7 @@ impl Render for Shell {
         crate::ui::reap_popup(&mut self.annotation_agents_menu, window);
         crate::ui::reap_popup(&mut self.ws_menu, window);
         crate::ui::reap_popup(&mut self.web_menu, window);
+        crate::ui::reap_popup(&mut self.browser.menu, window);
         crate::ui::reap_popup(&mut self.right.plus, window);
         crate::ui::reap_popup(&mut self.devices.menu, window);
         crate::ui::reap_popup(&mut self.devices.choice, window);
@@ -589,6 +590,7 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &ToggleDiff, w, cx| this.toggle_diff(w, cx)))
             .on_action(cx.listener(|this, _: &ReloadPage, w, cx| this.reload_shown_page(w, cx)))
             .on_action(cx.listener(|this, _: &FocusAddress, w, cx| this.focus_address(w, cx)))
+            .on_action(cx.listener(|this, _: &ToggleDevTools, w, cx| this.toggle_devtools(w, cx)))
             .on_action(cx.listener(|this, _: &CopyPageUrl, w, cx| this.copy_page_url(w, cx)))
             .on_action(cx.listener(|this, _: &CopyPrNumber, w, cx| this.copy_review(false, w, cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.toggle_settings_here(window, cx)))

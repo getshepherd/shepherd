@@ -229,6 +229,13 @@ impl Shell {
                         if sidebar_entries(cx).iter().any(|e| e.id == key.0) {
                             let (mark, url) = (seen_key(&key), url.clone());
                             cx.background_spawn(async move { crate::web::Seen::default().keep_icon(&mark, &url, &bytes) }).detach();
+                        } else if browser::is_tab(&key.0) {
+                            // a browser tab's is its site's (`url`), which Recently used shows
+                            if let Favicon::Image(image) = slot {
+                                s.browser.site_icons.insert(url.clone(), Some(image.clone()));
+                            }
+                            let url = url.clone();
+                            cx.background_spawn(async move { crate::web::Seen::default().keep_icon(&crate::web::site_key(&url), &url, &bytes) }).detach();
                         }
                     }
                     // the one kept from an earlier launch stays
@@ -272,6 +279,7 @@ impl Shell {
             self.ws_menu.is_some(),
             self.web_menu.is_some(),
             self.right.plus.is_some(),
+            self.browser.menu.is_some(),
             self.right.discard.is_some(),
             self.right.agents.is_some(),
             self.pane_menu.is_some(),
@@ -778,7 +786,7 @@ impl Shell {
         // the page that takes the keyboard takes it after the others let go: `focus_parent` would take it back
         let mut takes = None;
         // a blank browser tab lists the ports in its page's place
-        let ports = shown.as_ref().is_some_and(|k| self.shows_ports(k));
+        let ports = shown.as_ref().is_some_and(|k| self.shows_home(k));
         // a device's 3D view shows once its device is drawn: its loader stands in until then
         let drawing = self.device_pages_drawing();
         for (key, page) in &mut self.pages.live {

@@ -52,7 +52,7 @@ Before opening a PR, and in its description:
   change touches, and attach both to the PR. `docs/mock/shot.sh <out.png>` shoots the window from the mock fixture on
   macOS (`make linux-shot` on Linux, below), and
   `SHEPHERD_PANEL=commands|agents|workspaces|sessions|browser|diffs|usage|rename|review[:summary|timeline|code|checks|menu]` opens a
-  panel for the shot (`browser`, a blank browser tab in the right panel; `diffs`, the Diffs tab; `files`, the Files tab,
+  panel for the shot (`browser`, a blank browser tab in the right panel; `browser-menu`, that tab's `…` menu; `diffs`, the Diffs tab; `files`, the Files tab,
   `files:<path>` with that path shown in its tree, `file:<path>` the file's own tab; `usage`, the limits popup; `rename`, the shown workspace's name being renamed in the sidebar; `projects`, the T3 Code sidebar's project select;
   `device:ios:<udid>`, a device's tab, `:tools` and `:tools:overlay` after it its Tools panel and accessibility overlay,
   `:text-size` the rail's Text size menu). If a change has

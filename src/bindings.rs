@@ -69,6 +69,7 @@ app_actions! {
     SessionsPanel: "Sessions",
     ReloadPage: "Reload page",
     FocusAddress: "Focus page address",
+    ToggleDevTools: "Page DevTools",
     CopyPageUrl: "Copy page URL, or the pull request's link",
     CopyPrNumber: "Copy pull request number",
     Quit: "Quit",
@@ -119,6 +120,8 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("NextWaitingAgent", "cmd-j"),
     ("ReloadPage", "cmd-r"),
     ("FocusAddress", "cmd-l"),
+    // Safari's and Chrome's: WebKit leaves it to the app's menu, so without this binding it did nothing
+    ("ToggleDevTools", "cmd-alt-i"),
     ("CopyPageUrl", "cmd-shift-c"),
     ("CopyPrNumber", "cmd-shift-k"),
     ("Quit", "cmd-q"),
@@ -332,7 +335,7 @@ const TERMINAL: &str = "Terminal";
 pub const PANEL: &str = "Panel";
 
 /// Shepherd's keys that mean something only on a page: in a pane, where herdr's chords live, they give way to herdr's.
-const PAGE_ACTIONS: [&str; 3] = ["ReloadPage", "FocusAddress", "CopyPageUrl"];
+const PAGE_ACTIONS: [&str; 4] = ["ReloadPage", "FocusAddress", "CopyPageUrl", "ToggleDevTools"];
 
 /// Whether herdr gets `chord` in the panes: not when `shepherd` uses it for anything but a page.
 fn herdr_keeps(chord: &str, shepherd: &[(String, String)]) -> bool {

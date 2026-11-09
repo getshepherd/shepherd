@@ -399,8 +399,8 @@ impl Shell {
             Some(Surface::Browser(id)) => {
                 let key = (id, None);
                 let bar = self.render_browser_bar(&key, theme, window, cx);
-                let page = match self.shows_ports(&key) {
-                    true => self.render_ports(&key, theme, window, cx),
+                let page = match self.shows_home(&key) {
+                    true => self.render_home(&key, theme, window, cx),
                     false => div().flex_1().min_h_0().flex().flex_col().child(self.render_web_area(&key, theme, window, cx)).children(self.render_annotations(&key, theme, cx)).into_any_element(),
                 };
                 // the page's own clicks reach `PageEvent::Clicked`; this takes the bar's and the notes'
