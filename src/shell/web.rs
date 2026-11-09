@@ -487,6 +487,9 @@ impl Shell {
             Some(config) => wry::WebViewBuilderExtMacos::with_webview_configuration(builder, config),
             None => builder,
         };
+        // a page zooms with a pinch; a device's 3D view keeps its gestures for the model
+        #[cfg(target_os = "macos")]
+        let pinch_zooms = device.is_none();
         // a device's 3D view: its frames, model and input go over a scheme and IPC of its own
         let builder = match device {
             Some((session, feed)) => super::device::three::attach(builder, session, feed, self.rt.clone(), move || ready(PageEvent::Ready)),
@@ -530,6 +533,10 @@ impl Shell {
                 wry::NewWindowResponse::Deny
             })
             .build_as_child(&parent)?;
+        #[cfg(target_os = "macos")]
+        if pinch_zooms {
+            host::allow_magnification(&view);
+        }
         // GPUI's deferred layer goes on a plane of its own above native views (macOS only, in this GPUI); the page
         // moves into a view of its own below it. Without it, the page hides under Shepherd's overlays instead.
         #[cfg(target_os = "macos")]
@@ -1259,6 +1266,13 @@ mod host {
     pub(super) fn loading(view: &wry::WebView) -> bool {
         // SAFETY: `isLoading` on a live WKWebView, on the main thread
         unsafe { msg_send![&*view.webview(), isLoading] }
+    }
+
+    /// Lets a trackpad's pinch zoom the page, and a two-finger double tap zoom to what it is on, as Safari does:
+    /// WKWebView leaves both off unless asked.
+    pub(super) fn allow_magnification(view: &wry::WebView) {
+        // SAFETY: `setAllowsMagnification:` on a live WKWebView, on the main thread
+        let () = unsafe { msg_send![&*view.webview(), setAllowsMagnification: true] };
     }
 
     /// Whether WKWebView has an address yet (its `URL` is nil before a load commits).
