@@ -317,6 +317,8 @@ impl Shell {
                     crate::ui::project_icon::project_icon(&w.label, seed, dir.as_deref(), 14., selected, theme, cx)
                 })
             };
+            // the field takes the row's room the spacer after the name would otherwise split with it
+            let renaming = editing.is_some();
             let name = match editing {
                 Some(field) => field.into_any_element(),
                 None => div().min_w_0().truncate().child(w.label.clone()).into_any_element(),
@@ -348,7 +350,7 @@ impl Shell {
                                 .child(name)
                                 .children(folded.map(|n| count_badge(theme, n)))
                                 .children(sync_inline)
-                                .child(div().flex_1())
+                                .when(!renaming, |el| el.child(div().flex_1()))
                                 .children(inline),
                         )
                         .when(two, |el| {
