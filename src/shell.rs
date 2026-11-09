@@ -286,6 +286,9 @@ pub struct Shell {
     resize_hold: gpui::Task<()>,
     /// Since when each agent has had its status: how long the waiting ones have waited.
     since: crate::model::Since,
+    /// The T3 Code sidebar's agents settled by hand, by pane id: with the status and its `since` when they were, so a
+    /// change of status brings one back up. ponytail: in memory, a restart brings them all back up.
+    settled: HashMap<String, (AgentStatus, Option<Instant>)>,
     /// `since` as saved for each place, so a restart keeps it.
     agent_times: HashMap<String, crate::model::SavedTimes>,
     /// The loop that keeps the window in step with herdr; replacing it (a switch of session) stops the last one.
@@ -626,6 +629,7 @@ impl Shell {
                     frame_save: gpui::Task::ready(()),
                     resize_hold: gpui::Task::ready(()),
                     since: Default::default(),
+                    settled: Default::default(),
                     agent_times: sync::load_agent_times(),
                     sync: gpui::Task::ready(()),
                     resync: Default::default(),

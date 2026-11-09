@@ -1,9 +1,10 @@
 //! The T3 Code sidebar, as Zeron ported it: a search and project select over a flat list of agents, each a card of three lines
 //! (the project with the status, the title, the branch with what it changed), and the Working and Settled shelves at
-//! the bottom. Shepherd has no threads: an agent is one, and a workspace without an agent settles as itself.
+//! the bottom. Shepherd has no threads: an agent is one, and a workspace without an agent settles as itself; an agent
+//! settles by hand, from its card, until its status changes.
 // ponytail: no Snoozed shelf or pins
 use super::*;
-use crate::model::{Since, Thread, Workspace, thread_shown};
+use crate::model::{Pane, Since, Thread, Workspace, thread_shown};
 use crate::settings::SidebarStyle;
 
 /// Zeron's card: 6 px above and below, 2 between its lines.
@@ -189,6 +190,12 @@ impl Shell {
         for shelf in [&mut shelves.active, &mut shelves.working, &mut shelves.settled] {
             shelf.retain(|t| snapshot.thread_matches(*t, &query));
         }
+        // the agents settled by hand go to the Settled shelf, at its top
+        if live {
+            let (settled, active) = shelves.active.into_iter().partition(|(_, p)| p.is_some_and(|p| self.is_settled(p)));
+            shelves.active = active;
+            shelves.settled = [settled, shelves.settled].concat();
+        }
         let (main, working) = (shelves.active.len(), shelves.working.len());
         let threads: Vec<Thread> = shelves.active.into_iter().chain(shelves.working).chain(shelves.settled).collect();
         // a swipe's preview of another place: its waits are not tracked here
@@ -250,6 +257,11 @@ impl Shell {
         })
     }
 
+    /// Whether `pane` was settled by hand and its status has not changed since.
+    fn is_settled(&self, pane: &Pane) -> bool {
+        self.settled.get(&pane.pane_id) == Some(&(pane.agent_status, self.since.get(&pane.pane_id).map(|(_, at)| *at)))
+    }
+
     /// Goes to a card: its agent, or without one its workspace's `tab`.
     fn show_thread(&mut self, tab: Option<String>, agent: Option<(String, String)>, cx: &mut Context<Self>) {
         match agent {
@@ -303,7 +315,34 @@ impl Shell {
                     .into_any_element()
             })
         });
+        // T3 Code's Settle on hover, over the status: an agent that waits for nothing and is still at the top
+        let group = SharedString::from(format!("thread-card-{}", pane.map_or(id.as_str(), |p| p.pane_id.as_str())));
+        let settle = pane.filter(|p| live && p.agent_status != AgentStatus::Working && !self.is_settled(p)).map(|p| {
+            let key = (p.pane_id.clone(), (p.agent_status, since.get(&p.pane_id).map(|(_, at)| *at)));
+            div()
+                .id("thread-settle")
+                .absolute()
+                .right_0()
+                .size(px(LINE_H + 2.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.))
+                .opacity(0.)
+                .group_hover(group.clone(), |s| s.opacity(1.))
+                .hover(|s| s.bg(theme.hover))
+                .tooltip(tip("Settle", None))
+                .child(gpui::svg().path("icons/lucide-check-check.svg").size(px(14.)).text_color(theme.text_muted))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.settled.insert(key.0.clone(), key.1);
+                    cx.notify();
+                }))
+        });
+        let has_settle = settle.is_some();
+        let status = status.map(|s| div().flex_none().when(has_settle, |el| el.group_hover(group.clone(), |s| s.opacity(0.))).child(s));
         let top = div()
+            .relative()
             .w_full()
             .h(px(LINE_H))
             .flex()
@@ -313,7 +352,8 @@ impl Shell {
             .text_color(theme.text_faint)
             .children(art)
             .child(div().flex_1().min_w_0().truncate().child(project.label.clone()))
-            .children(status);
+            .children(status)
+            .children(settle);
 
         // the title, or what stands in for it
         let first = threads.iter().position(|(o, _)| o.workspace_id == id) == Some(i);
@@ -407,6 +447,7 @@ impl Shell {
         let menu_on = live && self.ws_menu.as_ref().is_some_and(|m| m.is_open() && m.value.0 == id);
         let label = w.label.clone();
         let card = row(theme, selected, SharedString::from(format!("thread-{}", pane.map_or(id.as_str(), |p| p.pane_id.as_str()))))
+            .group(group)
             .h(px(height))
             .flex_col()
             .items_start()
