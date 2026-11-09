@@ -18,6 +18,8 @@ cargo build -q
 # the screen there and the shot comes out black.
 Xvfb :99 -screen 0 1600x1000x24 -nolisten tcp -extension Composite >/dev/null 2>&1 &
 export DISPLAY=:99
+# Without a window manager no window is ever active: a focused field draws no cursor or selection then.
+evilwm >/dev/null 2>&1 &
 export XDG_RUNTIME_DIR=$(mktemp -d)
 sleep 1
 SHEPHERD_MOCK=$mock SHEPHERD_SETTINGS_FILE=$base/settings.json SHEPHERD_HERDR=$mock/bin/herdr \
@@ -32,6 +34,7 @@ win=$(xdotool search --name '^Shepherd$' | head -1)
 [ -n "$win" ] || { echo "no window of the fixture's Shepherd" >&2; exit 1; }
 # GPUI starts drawing on an X event the bare server never sends by itself: a resize is one, at shot.sh's size
 xdotool windowsize "$win" 1360 850
+xdotool windowfocus "$win"
 sleep 3
 [ -d "$(dirname "$out")" ] || { mkdir -p "$(dirname "$out")" && chown "${HOST_UID:-0}:${HOST_GID:-0}" "$(dirname "$out")"; }
 import -window "$win" "$out"
