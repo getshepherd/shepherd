@@ -53,7 +53,7 @@ Before opening a PR, and in its description:
   macOS (`make linux-shot` on Linux, below), and
   `SHEPHERD_PANEL=commands|agents|workspaces|sessions|browser|diffs|usage|review[:summary|timeline|code|checks|menu]` opens a
   panel for the shot (`browser`, a blank browser tab in the right panel; `diffs`, the Diffs tab; `files`, the Files tab,
-  `files:<path>` with that path shown in its tree, `file:<path>` the file's own tab; `usage`, the limits popup;
+  `files:<path>` with that path shown in its tree, `file:<path>` the file's own tab; `usage`, the limits popup; `projects`, the T3 Code sidebar's project select;
   `device:ios:<udid>`, a device's tab, `:tools` and `:tools:overlay` after it its Tools panel and accessibility overlay,
   `:text-size` the rail's Text size menu). If a change has
   nothing to see (an internal refactor, a backend fix), say so instead.
