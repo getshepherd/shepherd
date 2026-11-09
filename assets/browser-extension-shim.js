@@ -7,6 +7,14 @@
 // WebKit lacks altogether is added only when the manifest asks for its permission, as Chrome gives it. What WebKit
 // has was checked against its Source/WebKit/WebProcess/Extensions/Interfaces/WebExtensionAPI*.idl (2026-11).
 (() => {
+  // Proton Pass swaps the global chrome and browser for Proxies of its own that answer nothing, to keep the API from
+  // other scripts; in Chrome that is harmless, but WebKit then delivers no event, no message, to the extension's
+  // listeners. Pinned, the swap fails (a TypeError in its timer) and WebKit's stay.
+  for (const name of ['chrome', 'browser']) {
+    try {
+      if (globalThis[name]) Object.defineProperty(globalThis, name, { value: globalThis[name], writable: false, configurable: false });
+    } catch {}
+  }
   // an event that never fires
   const event = () => ({ addListener() {}, removeListener() {}, hasListener: () => false, hasListeners: () => false });
   // a call that does nothing and answers `value` (or what `value` returns for its arguments), by promise and by
