@@ -93,7 +93,8 @@ impl Render for Shell {
         if self.sidebar_cursor.is_some() && !self.focus.is_focused(window) {
             self.sidebar_cursor = None;
         }
-        let overlaid = self.sidebar_cursor.is_some() || self.panel_focused() || self.settings.is_some() || self.command_panel.as_ref().is_some_and(|p| p.is_open()) || self.floating_open();
+        // a name being renamed keeps its field's focus too, also when herdr moves its own meanwhile
+        let overlaid = self.sidebar_cursor.is_some() || self.panel_focused() || self.settings.is_some() || self.command_panel.as_ref().is_some_and(|p| p.is_open()) || self.floating_open() || self.renaming.is_some();
         // herdr moving its focus (a split, an agent's pane) is where the keys go next, as a click is
         if let Some(f) = shown.iter().find(|f| f.focused).filter(|f| self.herdr_focus.as_ref() != Some(&f.pane_id)) {
             self.herdr_focus = Some(f.pane_id.clone());

@@ -770,6 +770,14 @@ impl Shell {
         cx.notify();
     }
 
+    /// The shown workspace's name being renamed in the sidebar, as its menu's Rename starts it: `SHEPHERD_PANEL=rename`
+    /// for a screenshot.
+    pub fn rename_shown_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.shown_tab() else { return };
+        let label = self.snapshot.as_ref().and_then(|s| s.workspaces.iter().find(|w| w.workspace_id == tab.workspace_id)).map(|w| w.label.clone());
+        self.start_rename(RenameTarget::Workspace(tab.workspace_id), label.unwrap_or_default(), window, cx);
+    }
+
     /// Settings on its Usage page, opened if it is not up: the limits popup's way there.
     pub(crate) fn open_usage_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.is_none() {
