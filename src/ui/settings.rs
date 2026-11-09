@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 mod backends;
+mod browser;
 mod extensions;
 mod render;
 mod select;
@@ -46,6 +47,7 @@ enum Section {
     Notifications,
     Usage,
     Extensions,
+    Browser,
     Backend,
     Worktrees,
     Shortcuts,
@@ -53,18 +55,26 @@ enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 10] = [
+    /// In the order of the column, which j/k and ↓/↑ follow too.
+    const ALL: [Section; 11] = [
         Section::General,
-        Section::Terminal,
         Section::Appearance,
         Section::Notifications,
-        Section::Usage,
-        Section::Extensions,
-        Section::Backend,
-        Section::Worktrees,
         Section::Shortcuts,
+        Section::Terminal,
+        Section::Browser,
+        Section::Worktrees,
+        Section::Extensions,
+        Section::Usage,
+        Section::Backend,
         Section::About,
     ];
+
+    /// The first of a group in the column, set apart from the one above: the app itself; what the window holds; what
+    /// Shepherd talks to; About.
+    fn starts_group(self) -> bool {
+        matches!(self, Section::Terminal | Section::Extensions | Section::About)
+    }
 
     fn label(self) -> &'static str {
         match self {
@@ -74,6 +84,7 @@ impl Section {
             Section::Notifications => "Notifications",
             Section::Usage => "Usage",
             Section::Extensions => "Extensions",
+            Section::Browser => "Browser",
             Section::Backend => "Backend",
             Section::Worktrees => "Worktrees",
             Section::Shortcuts => "Shortcuts",
@@ -88,7 +99,8 @@ impl Section {
             Section::Appearance => "icons/tuning.svg",
             Section::Notifications => "icons/bell.svg",
             Section::Usage => "icons/clock-circle.svg",
-            Section::Extensions => "icons/solar/global.svg",
+            Section::Extensions => "icons/solar/widget-add.svg",
+            Section::Browser => "icons/solar/global.svg",
             Section::Backend => "icons/solar/server-2.svg",
             Section::Worktrees => "icons/git-branch.svg",
             Section::Shortcuts => "icons/keyboard.svg",
@@ -176,6 +188,13 @@ pub struct SettingsView {
     ext_updates: Option<std::collections::HashMap<String, Result<Option<crate::extensions::Release>, String>>>,
     /// Extensions' tab: the extensions installed, or the web pages added by hand.
     ext_tab: extensions::Tab,
+    /// Browser's Install field for an extension: a Web Store link or id; whether it is downloading.
+    bext_input: Entity<InputState>,
+    bext_busy: bool,
+    /// Each browser extension's manifest as read, by folder.
+    bext_info: std::collections::HashMap<std::path::PathBuf, browser::Shown>,
+    /// The browser extension whose removal waits for a yes.
+    bext_remove: Option<std::path::PathBuf>,
     /// The Install dialog, up or playing its exit.
     install_dialog: Option<crate::ui::Popup<()>>,
     /// The settings dialog of an extension, by name (when it runs, its folder), up or playing its exit.
@@ -227,6 +246,7 @@ pub fn update(cx: &mut App, change: impl FnOnce(&mut Settings)) {
     };
     let saved = settings.save(&path);
     cx.global_mut::<SettingsGlobal>().error = saved.err().map(|e| format!("cannot save {}: {e:#}", path.display()));
+    crate::browser_extensions::sync(&settings.browser_extensions);
     set_binary(settings.herdr_bin.clone());
     crate::hc::set_sync(settings.hc_sync);
     set_socket(settings.herdr_socket.clone());
@@ -311,11 +331,17 @@ impl SettingsView {
 
         let select_search = field(None, "Search", window, cx);
         let ext_repo = field(None, "github.com/owner/repo", window, cx);
+        let bext_input = field(None, "chromewebstore.google.com/detail/…", window, cx);
         let mut subscriptions = vec![cx.subscribe(&ext_repo, |v: &mut Self, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) && matches!(v.install, extensions::Install::Idle) {
                 v.find_release(cx);
             }
         })];
+        subscriptions.push(cx.subscribe(&bext_input, |v: &mut Self, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                v.add_from_store(cx);
+            }
+        }));
         subscriptions.push(cx.subscribe(&select_search, |v: &mut Self, search, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 // a query highlights its first match; the emptied field of an opening select keeps the current option
@@ -445,6 +471,10 @@ impl SettingsView {
             ext_note: None,
             ext_updates: None,
             ext_tab: Default::default(),
+            bext_input,
+            bext_busy: false,
+            bext_info: Default::default(),
+            bext_remove: None,
             install_dialog: None,
             ext_settings: None,
             ext_icons: Default::default(),

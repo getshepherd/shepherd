@@ -77,7 +77,7 @@ fn main() {
         if std::env::var_os("SHEPHERD_SETTINGS").is_some() {
             shepherd::shell::Shell::toggle_settings(cx);
         }
-        // `SHEPHERD_PANEL=commands|agents|workspaces|sessions|browser|diffs|usage|projects|rename|review[:tab]|files[:path]|file:path`: opens that panel (`rename`, the
+        // `SHEPHERD_PANEL=commands|agents|workspaces|sessions|browser[:url]|diffs|usage|projects|rename|review[:tab]|files[:path]|file:path`: opens that panel (`rename`, the
         // shown workspace's name being renamed in the sidebar) once the first snapshot is likely in (screenshots).
         // `devices`, or a device's key (`device:ios:<udid>`), opens the right panel's Device tab on it; `:tools` after it
         // opens its Tools panel, `:tools:overlay` the accessibility overlay too, `:text-size` the rail's Text size menu.
@@ -102,7 +102,8 @@ fn main() {
                             shell.toggle_review(window, cx);
                             shell.show_review_tab(tab, window, cx);
                         }
-                        (None, None, "browser") => shell.open_blank_tab(window, cx),
+                        (None, None, "browser") => shell.open_blank_tab(None, window, cx),
+                        (None, None, tab) if tab.starts_with("browser:") => shell.open_blank_tab(Some(tab["browser:".len()..].to_string()), window, cx),
                         (None, None, "diffs") => shell.toggle_diff(window, cx),
                         (None, None, files) if files.starts_with("file") => shell.show_files(files, window, cx),
                         (None, None, "usage") => shell.open_usage_menu(window, cx),

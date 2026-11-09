@@ -18,7 +18,7 @@ pub(super) enum Install {
 }
 
 /// `action`'s pill in `bg`, for the yes of a confirmation; its own, since a second `hover` on one panics.
-fn filled(id: &'static str, label: &'static str, bg: gpui::Hsla, fg: gpui::Hsla) -> Stateful<Div> {
+pub(super) fn filled(id: &'static str, label: &'static str, bg: gpui::Hsla, fg: gpui::Hsla) -> Stateful<Div> {
     div()
         .id(id)
         .flex_none()
@@ -226,7 +226,8 @@ impl SettingsView {
         if !matches!(self.install, Install::Installing) {
             (self.install, self.install_note) = (Install::Idle, None);
         }
-        self.ext_repo.update(cx, |input, cx| input.focus(window, cx));
+        let input = if self.section == super::Section::Browser { &self.bext_input } else { &self.ext_repo };
+        input.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 
@@ -443,6 +444,9 @@ impl SettingsView {
 
     /// The Install dialog over the window: a repo to look up, then the build found to confirm.
     pub(super) fn install_overlay(&self, popup: &crate::ui::Popup<()>, theme: &Theme, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.section == super::Section::Browser {
+            return modal("install", popup, self.browser_install_card(theme, cx), window);
+        }
         let (title, body): (String, String) = match &self.install {
             Install::Confirm(r) => (
                 format!("Install {} {}?", r.repo, r.tag),
@@ -484,6 +488,33 @@ impl SettingsView {
                     .child(go),
             );
         modal("install", popup, card, window)
+    }
+
+    /// The Install dialog of Browser's extensions: a Web Store link or id to download, or a folder to load from.
+    fn browser_install_card(&self, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div> {
+        let go = match self.bext_busy {
+            true => filled("bext-install-go", "Installing…", theme.accent.opacity(0.6), theme.on_accent),
+            false => filled("bext-install-go", "Install", theme.accent, theme.on_accent).on_click(cx.listener(|v, _: &ClickEvent, _, cx| v.add_from_store(cx))),
+        };
+        dialog_card(theme, "install-dialog")
+            .gap(px(8.))
+            .on_mouse_down_out(cx.listener(|v, _, _, cx| v.close_install(cx)))
+            .child(div().text_size(px(17.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD).child("Install a browser extension"))
+            .child(div().line_height(px(19.)).text_color(theme.text_muted).child(
+                "Paste its Chrome Web Store link, or its id. It runs in every browser tab with all it asks for, so install only what you trust.",
+            ))
+            .child(div().mt(px(12.)).child(labelled(theme, "Chrome Web Store", field(theme, &self.bext_input).w_full())))
+            .children(self.install_note.clone().map(|n| div().text_size(px(12.)).line_height(px(16.)).text_color(theme.danger).child(n)))
+            .child(
+                div()
+                    .mt(px(16.))
+                    .flex()
+                    .gap(px(8.))
+                    .child(action(theme, "bext-folder", "Choose Folder…").on_click(cx.listener(|v, _: &ClickEvent, _, cx| v.add_folder(cx))))
+                    .child(div().flex_1())
+                    .child(action(theme, "ext-install-cancel", "Cancel").on_click(cx.listener(|v, _: &ClickEvent, _, cx| v.close_install(cx))))
+                    .child(go),
+            )
     }
 
     /// Zeron's tab: its label and count, underlined when shown.
