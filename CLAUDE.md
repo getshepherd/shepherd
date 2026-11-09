@@ -51,14 +51,17 @@ Before opening a PR, and in its description:
 - **Screenshots, before and after.** Capture the app on `main` (before) and on the branch (after), showing what the
   change touches, and attach both to the PR. `docs/mock/shot.sh <out.png>` shoots the window from the mock fixture on
   macOS (`make linux-shot` on Linux, below), and
-  `SHEPHERD_PANEL=commands|agents|workspaces|sessions|browser|diffs|usage|review[:summary|timeline|code|checks|menu]` opens a
+  `SHEPHERD_PANEL=commands|agents|workspaces|sessions|browser|diffs|usage|rename|review[:summary|timeline|code|checks|menu]` opens a
   panel for the shot (`browser`, a blank browser tab in the right panel; `diffs`, the Diffs tab; `files`, the Files tab,
-  `files:<path>` with that path shown in its tree, `file:<path>` the file's own tab; `usage`, the limits popup; `projects`, the T3 Code sidebar's project select;
+  `files:<path>` with that path shown in its tree, `file:<path>` the file's own tab; `usage`, the limits popup; `rename`, the shown workspace's name being renamed in the sidebar; `projects`, the T3 Code sidebar's project select;
   `device:ios:<udid>`, a device's tab, `:tools` and `:tools:overlay` after it its Tools panel and accessibility overlay,
   `:text-size` the rail's Text size menu). If a change has
   nothing to see (an internal refactor, a backend fix), say so instead.
   GitHub's API can't attach images: push them to the orphan branch `pr-assets` under `pr-<number>/` and link them as
   `https://raw.githubusercontent.com/getshepherd/shepherd/pr-assets/pr-<number>/<name>.png`.
+  This holds on a server too (a Claude session on a Linux box with no display): shoot in Docker (`make linux-shot`,
+  below), and a change the UI shows is not done until its PR has both shots. If the fixture can't show it, make it
+  show it (a `SHEPHERD_PANEL` value, a fixture change kept out of the PR) rather than describe it in words instead.
 - **What changed and why.** Explain in plain words what the user sees or can do now and what was wrong or missing
   before, then point to the main places in the code. Show it: the screenshots, plus a short clip or the steps to try
   it when one frame can't show the behavior (a swipe, a shortcut, an animation).
