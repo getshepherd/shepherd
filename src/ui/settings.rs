@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 
 mod backends;
 mod browser;
+pub use browser::adds as add_browser_extension;
 mod extensions;
 mod render;
 mod select;

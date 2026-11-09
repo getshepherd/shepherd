@@ -17,6 +17,39 @@ pub fn unavailable() -> Option<&'static str> {
     Some("Browser extensions run on macOS only, for now.")
 }
 
+/// Run in browser tabs: on a Web Store page of an extension, the store's own button (Add to Chrome, which it greys
+/// out off Chrome) says Add to Shepherd and goes to `shepherd://install-extension/<id>`, which installs it as Settings
+/// does. The store is a single-page app: the button is looked for again on each change of the page.
+// ponytail: the button is the one whose short label names Chrome, as the store writes it in every language; a store
+// redesign that drops the word needs a new match
+pub const STORE_SCRIPT: &str = r#"(() => {
+  if (location.host !== 'chromewebstore.google.com') return;
+  const id = () => location.pathname.match(/\/detail\/(?:[^/]+\/)?([a-p]{32})/)?.[1];
+  const dress = () => {
+    if (!id()) return;
+    for (const b of document.querySelectorAll('button:not([data-shepherd])')) {
+      const label = [...b.querySelectorAll('span')].find((s) => !s.children.length && /\bChrome\b/.test(s.textContent));
+      if (!label || b.textContent.trim().length > 40) continue;
+      b.dataset.shepherd = '';
+      b.disabled = false;
+      b.removeAttribute('aria-disabled');
+      label.textContent = label.textContent.replace('Chrome', 'Shepherd');
+    }
+  };
+  addEventListener('click', (e) => {
+    if (!e.target.closest?.('button[data-shepherd]') || !id()) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    location.href = 'shepherd://install-extension/' + id();
+  }, true);
+  new MutationObserver(dress).observe(document, { childList: true, subtree: true });
+})();"#;
+
+/// The id a `shepherd://install-extension/<id>` link asks for (see [`STORE_SCRIPT`]).
+pub fn install_link(url: &str) -> Option<String> {
+    store_id(url.strip_prefix("shepherd://install-extension/")?)
+}
+
 /// Where extensions from the Web Store are unpacked: beside the settings, so a second Shepherd with settings of its
 /// own (`SHEPHERD_SETTINGS_FILE`) keeps its own.
 pub fn dir() -> PathBuf {
@@ -377,6 +410,13 @@ mod webkit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_install_links() {
+        let id = "dbepggeogbaibhgnhhndojpepiihcmeb";
+        assert_eq!(install_link(&format!("shepherd://install-extension/{id}")).as_deref(), Some(id));
+        assert_eq!(install_link(&format!("https://x/{id}")), None);
+    }
 
     #[test]
     fn finds_store_ids() {

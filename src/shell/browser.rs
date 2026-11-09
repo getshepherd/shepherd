@@ -94,19 +94,16 @@ fn site(url: &str) -> Option<String> {
     Some(format!("{}://{}", uri.scheme_str()?, uri.authority()?))
 }
 
-/// What's typed in the address field, as a URL: `localhost:3000` and `example.com` get `http://`, anything with a
-/// space or without a dot or a port goes to a search.
+/// What's typed in the address field, as a URL: `localhost:3000` gets `http://` and `example.com` `https://` (see
+/// `web::normalize`); anything with a space or without a dot or a port goes to a search.
 fn typed_url(text: &str) -> Option<String> {
     let text = text.trim();
     if text.is_empty() {
         return None;
     }
-    if text.contains("://") || text.starts_with("about:") {
-        return Some(text.to_string());
-    }
     let host = text.split(['/', '?', '#']).next().unwrap_or_default();
-    if !text.contains(' ') && (host.contains('.') || host.contains(':') || host == "localhost") {
-        return Some(format!("http://{text}"));
+    if text.contains("://") || text.starts_with("about:") || (!text.contains(' ') && (host.contains('.') || host.contains(':') || host == "localhost")) {
+        return Some(crate::web::normalize(text));
     }
     let query: String = percent_encoding::utf8_percent_encode(text, percent_encoding::NON_ALPHANUMERIC).to_string();
     Some(format!("https://duckduckgo.com/?q={query}"))
@@ -384,7 +381,7 @@ mod tests {
     fn typed_addresses_become_urls_or_searches() {
         assert_eq!(typed_url("localhost:3000").as_deref(), Some("http://localhost:3000"));
         assert_eq!(typed_url("localhost").as_deref(), Some("http://localhost"));
-        assert_eq!(typed_url(" docs.rs/gpui ").as_deref(), Some("http://docs.rs/gpui"));
+        assert_eq!(typed_url(" docs.rs/gpui ").as_deref(), Some("https://docs.rs/gpui"));
         assert_eq!(typed_url("https://x.dev/a").as_deref(), Some("https://x.dev/a"));
         assert_eq!(typed_url("rust lifetimes").as_deref(), Some("https://duckduckgo.com/?q=rust%20lifetimes"));
         assert_eq!(typed_url("  "), None);

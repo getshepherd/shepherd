@@ -10,7 +10,7 @@ use std::sync::Arc;
 /// An extension's manifest as read for its row, with its icon ready to draw; or why it couldn't be read.
 pub(super) type Shown = Result<(bext::Info, Option<Arc<gpui::Image>>), String>;
 
-fn adds(cx: &mut App, path: PathBuf) {
+pub fn adds(cx: &mut App, path: PathBuf) {
     update(cx, |s| {
         s.browser_extensions.retain(|e| e.path != path);
         s.browser_extensions.push(BrowserExtension { path, on: true });

@@ -7,10 +7,20 @@ use gpui::{Bounds, ImageFormat, Pixels, point, px, size};
 /// How much of the window's left edge the page leaves while the sidebar is closed: the strip that brings it out.
 pub const PEEK_EDGE: f32 = 6.;
 
-/// `localhost:4317` → `http://localhost:4317`; a URL with a scheme is kept; surrounding space trimmed.
+/// `localhost:4317` → `http://localhost:4317`, `example.com` → `https://example.com`; a URL with a scheme is kept;
+/// surrounding space trimmed. Plain http is only for what is local (a port given, `localhost`, an IP, `.local`): macOS
+/// blocks it to anything else (App Transport Security) without a word, and the page stays blank.
 pub fn normalize(url: &str) -> String {
     let url = url.trim();
-    if url.contains("://") || url.starts_with("about:") { url.to_string() } else { format!("http://{url}") }
+    if url.contains("://") || url.starts_with("about:") {
+        return url.to_string();
+    }
+    let host = url.split(['/', '?', '#']).next().unwrap_or_default();
+    let local = host.contains(':')
+        || host.parse::<std::net::Ipv4Addr>().is_ok()
+        || host == "localhost"
+        || [".localhost", ".local"].iter().any(|l| host.ends_with(l));
+    format!("{}://{url}", if local { "http" } else { "https" })
 }
 
 /// What an entry goes by in the sidebar and the tab bar: its name, else its page's title once loaded, else the
@@ -336,6 +346,9 @@ mod tests {
     fn a_url_without_a_scheme_is_http() {
         assert_eq!(normalize(" localhost:4317 "), "http://localhost:4317");
         assert_eq!(normalize("127.0.0.1:8080/board"), "http://127.0.0.1:8080/board");
+        assert_eq!(normalize("192.168.1.5/x"), "http://192.168.1.5/x");
+        assert_eq!(normalize("mac.local"), "http://mac.local");
+        assert_eq!(normalize("example.com/a?b"), "https://example.com/a?b");
         assert_eq!(normalize("https://x.dev/a"), "https://x.dev/a");
     }
 

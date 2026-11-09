@@ -59,6 +59,8 @@ pub(super) enum PageEvent {
     Outside(String),
     /// A `shepherd://review` link: the PR of a branch, by a checkout of its repository, for the review panel.
     Review { dir: String, branch: String },
+    /// A Web Store page's Add to Shepherd: the extension's id, to install.
+    InstallExtension(String),
     /// One of Shepherd's shortcuts, pressed in the page.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Key(gpui::Keystroke),
@@ -466,7 +468,7 @@ impl Shell {
         };
         let (title, loaded, opened, followed, tabbed) = (send.clone(), send.clone(), send.clone(), send.clone(), send.clone());
         let ready = send.clone();
-        let (reviewed, reviewed_new) = (send.clone(), send.clone());
+        let (reviewed, reviewed_new, installs) = (send.clone(), send.clone(), send.clone());
         #[cfg(target_os = "macos")]
         let key_event = send;
         // a link to another site goes to the browser when the setting says so; anything else stays in the page
@@ -502,6 +504,11 @@ impl Shell {
             Some(script) => builder.with_initialization_script(script),
             None => builder,
         };
+        // the Web Store's button installs into Shepherd where WebKit can run extensions
+        let builder = match browser && crate::browser_extensions::unavailable().is_none() {
+            true => builder.with_initialization_script(crate::browser_extensions::STORE_SCRIPT),
+            false => builder,
+        };
         #[cfg(target_os = "linux")]
         let parent = Parent(window);
         #[cfg(not(target_os = "linux"))]
@@ -516,6 +523,10 @@ impl Shell {
             .with_document_title_changed_handler(move |t| title(PageEvent::Title(t)))
             .with_on_page_load_handler(move |e, _| loaded(PageEvent::Load(matches!(e, wry::PageLoadEvent::Started))))
             .with_navigation_handler(move |to| {
+                if let Some(id) = crate::browser_extensions::install_link(&to) {
+                    installs(PageEvent::InstallExtension(id));
+                    return false;
+                }
                 if let Some((dir, branch)) = review_link(&to) {
                     reviewed(PageEvent::Review { dir, branch });
                     return false;
@@ -646,6 +657,22 @@ impl Shell {
             }
             PageEvent::Outside(url) => crate::ui::open_outside(&url, cx),
             PageEvent::Review { dir, branch } => self.pick_review(dir, branch, window, cx),
+            PageEvent::InstallExtension(id) => {
+                crate::ui::toast::info(cx, "Installing the extension…", None);
+                let task = cx.background_spawn(async move { crate::browser_extensions::install_from_store(&id) });
+                cx.spawn(async move |_, cx| {
+                    let result = task.await;
+                    cx.update(|cx| match result {
+                        Ok(path) => {
+                            let name = crate::browser_extensions::info(&path).map(|i| i.name).unwrap_or_default();
+                            crate::ui::settings::add_browser_extension(cx, path);
+                            crate::ui::toast::info(cx, format!("Added {name}. It runs in browser tabs from their next load."), None);
+                        }
+                        Err(why) => crate::ui::toast::error(cx, why),
+                    })
+                })
+                .detach();
+            }
             // dispatched as if pressed in Shepherd; a menu or dialog it opens takes the keyboard in `sync_pages`
             PageEvent::Key(keystroke) => {
                 // GPUI's focus may be on what the page hides (a pane): the keystroke would start at the window's root,
