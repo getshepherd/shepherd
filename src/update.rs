@@ -33,8 +33,11 @@ const UPDATE_KEY: [u8; 32] = [
 pub struct Release {
     pub version: String,
     pub url: String,
+    /// The archive through GitHub's API, tried when `url` fails: see [`get_asset`].
+    pub api: Option<String>,
     pub size: u64,
     pub sig: Option<String>,
+    pub sig_api: Option<String>,
 }
 
 /// Where the app is with its updates.
@@ -254,6 +257,17 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
+/// A release's file from GitHub: its download link (`browser_download_url`), or, when that fails, the same file through
+/// the API (the asset's `url` in GitHub's JSON). github.com's downloads have timed out for anonymous clients while the API
+/// still served them (GitHub's incident of 2026-11-09). The error is the download link's: the one a person can try.
+pub fn get_asset(url: &str, api: Option<&str>) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+    let agent = agent();
+    agent.get(url).call().or_else(|e| match api {
+        Some(api) => agent.get(api).header("Accept", "application/octet-stream").call().map_err(|_| e),
+        None => Err(e),
+    })
+}
+
 /// The latest release and its archive for this machine.
 fn latest() -> anyhow::Result<Release> {
     let body = agent()
@@ -292,24 +306,29 @@ fn release_of(json: &serde_json::Value) -> Option<Release> {
     let assets = json["assets"].as_array()?;
     let named = |name: &str| assets.iter().find(|a| a["name"] == name);
     let (name, asset) = archives(&version).into_iter().find_map(|name| named(&name).map(|a| (name, a)))?;
-    let sig = match cfg!(target_os = "macos") {
-        true => None,
-        false => Some(named(&format!("{name}.sig"))?["browser_download_url"].as_str()?.to_string()),
+    let api = |a: &serde_json::Value| a["url"].as_str().map(String::from);
+    let (sig, sig_api) = match cfg!(target_os = "macos") {
+        true => (None, None),
+        false => {
+            let sig = named(&format!("{name}.sig"))?;
+            (Some(sig["browser_download_url"].as_str()?.to_string()), api(sig))
+        }
     };
-    Some(Release { url: asset["browser_download_url"].as_str()?.into(), size: asset["size"].as_u64()?, version, sig })
+    let url = asset["browser_download_url"].as_str()?.into();
+    Some(Release { url, api: api(asset), size: asset["size"].as_u64()?, version, sig, sig_api })
 }
 
 /// A release from GitHub's JSON as a page to open: `v0.2.0` and its `html_url`, which must be one of [`PAGES`].
 fn page_of(json: &serde_json::Value) -> Option<Release> {
     let version = json["tag_name"].as_str()?.strip_prefix('v')?.to_string();
     let url = json["html_url"].as_str().filter(|u| u.starts_with(PAGES))?.to_string();
-    Some(Release { version, url, size: 0, sig: None })
+    Some(Release { version, url, api: None, size: 0, sig: None, sig_api: None })
 }
 
 /// The release's signature, as `scripts/sign-update.sh` makes it: 64 bytes.
 fn signature(release: &Release) -> anyhow::Result<Vec<u8>> {
     let url = release.sig.as_deref().context("the release has no signature")?;
-    let sig = agent().get(url).call().context("cannot download the signature")?.body_mut().with_config().limit(1024).read_to_vec()?;
+    let sig = get_asset(url, release.sig_api.as_deref()).context("cannot download the signature")?.body_mut().with_config().limit(1024).read_to_vec()?;
     Ok(sig)
 }
 
@@ -331,7 +350,7 @@ fn download(release: &Release, dir: &Path, mut progress: impl FnMut(u64)) -> any
     std::fs::create_dir_all(dir)?;
     let name = release.url.rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or("Shepherd-update");
     let zip = dir.join(name);
-    let response = agent().get(&release.url).call().with_context(|| format!("cannot download {}", release.url))?;
+    let response = get_asset(&release.url, release.api.as_deref()).with_context(|| format!("cannot download {}", release.url))?;
     let mut body = response.into_body().into_with_config().limit(release.size + 1).reader();
     let mut file = std::fs::File::create(&zip).with_context(|| zip.display().to_string())?;
     let (mut buf, mut done, mut shown) = (vec![0; 1 << 16], 0u64, 0);
@@ -489,12 +508,14 @@ mod tests {
             "tag_name": "v0.2.0",
             "assets": [
                 { "name": "Shepherd-0.2.0-other.zip", "size": 1, "browser_download_url": "https://x/other" },
-                { "name": name, "size": 7, "browser_download_url": "https://x/zip" },
-                { "name": format!("{name}.sig"), "size": 64, "browser_download_url": "https://x/sig" },
+                { "name": name, "size": 7, "browser_download_url": "https://x/zip", "url": "https://api/zip" },
+                { "name": format!("{name}.sig"), "size": 64, "browser_download_url": "https://x/sig", "url": "https://api/sig" },
             ],
         });
-        let sig = (!cfg!(target_os = "macos")).then(|| "https://x/sig".to_string());
-        assert_eq!(release_of(&json), Some(Release { version: "0.2.0".into(), url: "https://x/zip".into(), size: 7, sig }));
+        let signed = !cfg!(target_os = "macos");
+        let (sig, sig_api) = (signed.then(|| "https://x/sig".to_string()), signed.then(|| "https://api/sig".to_string()));
+        let api = Some("https://api/zip".into());
+        assert_eq!(release_of(&json), Some(Release { version: "0.2.0".into(), url: "https://x/zip".into(), api, size: 7, sig, sig_api }));
         assert_eq!(release_of(&serde_json::json!({ "tag_name": "v0.2.0", "assets": [] })), None);
         // Off macOS an archive without its signature can't be installed.
         let unsigned = serde_json::json!({
@@ -502,6 +523,29 @@ mod tests {
             "assets": [{ "name": name, "size": 7, "browser_download_url": "https://x/zip" }],
         });
         assert_eq!(release_of(&unsigned).is_some(), cfg!(target_os = "macos"));
+    }
+
+    /// A download link that fails falls back to the API's, asked for the file's bytes as GitHub's API wants.
+    #[test]
+    fn a_failed_download_tries_the_api() {
+        use std::io::{BufRead, BufReader};
+        let api = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let api_url = format!("http://{}/asset", api.local_addr().unwrap());
+        let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead_url = format!("http://{}/zip", dead.local_addr().unwrap());
+        drop(dead);
+        std::thread::spawn(move || {
+            let (mut conn, _) = api.accept().unwrap();
+            let mut octets = false;
+            for line in BufReader::new(conn.try_clone().unwrap()).lines().map_while(Result::ok).take_while(|l| !l.is_empty()) {
+                octets |= line.eq_ignore_ascii_case("accept: application/octet-stream");
+            }
+            let reply = if octets { "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nzip" } else { "HTTP/1.1 406 No\r\nContent-Length: 0\r\n\r\n" };
+            conn.write_all(reply.as_bytes()).unwrap();
+        });
+        let body = get_asset(&dead_url, Some(&api_url)).unwrap().body_mut().read_to_string().unwrap();
+        assert_eq!(body, "zip");
+        assert!(get_asset(&dead_url, None).is_err());
     }
 
     #[test]
@@ -516,7 +560,7 @@ mod tests {
                 { "name": "Shepherd-0.3.0-universal.dmg", "size": 9, "browser_download_url": "https://x/dmg" },
             ],
         });
-        let want = Release { version: "0.3.0".into(), url: "https://x/universal".into(), size: 9, sig: None };
+        let want = Release { version: "0.3.0".into(), url: "https://x/universal".into(), api: None, size: 9, sig: None, sig_api: None };
         assert_eq!(release_of(&json), Some(want));
     }
 
@@ -576,7 +620,7 @@ mod tests {
     fn the_release_page() {
         let page = |url: &str| page_of(&serde_json::json!({ "tag_name": "v0.2.0", "html_url": url, "assets": [] }));
         let url = "https://github.com/getshepherd/shepherd/releases/tag/v0.2.0";
-        assert_eq!(page(url), Some(Release { version: "0.2.0".into(), url: url.into(), size: 0, sig: None }));
+        assert_eq!(page(url), Some(Release { version: "0.2.0".into(), url: url.into(), api: None, size: 0, sig: None, sig_api: None }));
         assert_eq!(page("https://github.com/getshepherd/shepherd-evil/releases/tag/v0.2.0"), None);
         assert_eq!(page("http://github.com/getshepherd/shepherd/releases/tag/v0.2.0"), None);
         assert_eq!(page_of(&serde_json::json!({ "tag_name": "v0.2.0" })), None);
