@@ -139,19 +139,24 @@ fn program_mark(name: &str, theme: &Theme) -> Option<Mark> {
     })
 }
 
-/// A tab's favicons from what its panes run, as (agent, program): a tile per pane as Rex's tabs have, agents first,
-/// then programs, then shells (a program without a mark is its shell's), at most [`MAX_MARKS`].
-fn marks(panes: &[(Option<&str>, Option<&str>)], theme: &Theme) -> Vec<Mark> {
-    let mut out: Vec<(u8, Mark)> = panes
+/// A tab's favicons from what its panes run, as (agent, program): a tile per pane as Rex's tabs have, the tab's
+/// focused pane (`focused`, an index into `panes`) first, so its tile is the one on top of the stack, then agents,
+/// programs and shells (a program without a mark is its shell's), at most [`MAX_MARKS`].
+fn marks(panes: &[(Option<&str>, Option<&str>)], focused: Option<usize>, theme: &Theme) -> Vec<Mark> {
+    let mut out: Vec<(bool, u8, Mark)> = panes
         .iter()
-        .map(|&(agent, program)| match (agent, program.and_then(|p| program_mark(p, theme))) {
-            (Some(_), _) => (0, (agent_icon(agent), agent_tint(agent, theme))),
-            (None, Some(mark)) => (1, mark),
-            (None, None) => (2, (agent_icon(None), agent_tint(None, theme))),
+        .enumerate()
+        .map(|(i, &(agent, program))| {
+            let (rank, mark) = match (agent, program.and_then(|p| program_mark(p, theme))) {
+                (Some(_), _) => (0, (agent_icon(agent), agent_tint(agent, theme))),
+                (None, Some(mark)) => (1, mark),
+                (None, None) => (2, (agent_icon(None), agent_tint(None, theme))),
+            };
+            (Some(i) != focused, rank, mark)
         })
         .collect();
-    out.sort_by_key(|(rank, _)| *rank);
-    out.into_iter().take(MAX_MARKS).map(|(_, mark)| mark).collect()
+    out.sort_by_key(|&(behind, rank, _)| (behind, rank));
+    out.into_iter().take(MAX_MARKS).map(|(_, _, mark)| mark).collect()
 }
 
 /// The program a pane runs, from herdr's `pane.process_info`: the leader of its foreground group, `None` when that
@@ -227,7 +232,7 @@ impl Shell {
     /// A pane's favicon as its tab shows it: its agent's mark, else its program's, else the terminal's.
     pub(super) fn pane_mark(&self, pane_id: &str, theme: &Theme) -> Mark {
         let agent = self.snapshot.as_ref().and_then(|s| s.panes.iter().find(|p| p.pane_id == pane_id)).and_then(|p| p.agent.as_deref());
-        marks(&[(agent, self.tab_bar.programs.get(pane_id).map(String::as_str))], theme)[0]
+        marks(&[(agent, self.tab_bar.programs.get(pane_id).map(String::as_str))], None, theme)[0]
     }
 
     /// The shown workspace's panes without an agent: an agent's pane shows its mark.
@@ -276,11 +281,13 @@ impl Shell {
                     .into_iter()
                     .map(|t| {
                         let programs = &self.tab_bar.programs;
-                        let panes: Vec<_> =
-                            s.panes.iter().filter(|p| p.tab_id == t.tab_id).map(|p| (p.agent.as_deref(), programs.get(&p.pane_id).map(String::as_str))).collect();
+                        let tab_panes: Vec<_> = s.panes.iter().filter(|p| p.tab_id == t.tab_id).collect();
+                        let panes: Vec<_> = tab_panes.iter().map(|p| (p.agent.as_deref(), programs.get(&p.pane_id).map(String::as_str))).collect();
+                        let focused_id = s.layouts.iter().find(|l| l.tab_id == t.tab_id).map(|l| l.focused_pane_id.as_str());
+                        let focused = tab_panes.iter().position(|p| Some(p.pane_id.as_str()) == focused_id);
                         let agents: Vec<&str> = panes.iter().filter_map(|p| p.0).collect();
                         let name = name_spans(&t.label, &agents);
-                        let marks = marks(&panes, theme);
+                        let marks = marks(&panes, focused, theme);
                         let zoomed = s.layouts.iter().any(|l| l.tab_id == t.tab_id && l.zoomed);
                         Tab {
                             id: t.tab_id.clone(),
@@ -403,7 +410,7 @@ mod tests {
     #[test]
     fn a_tab_shows_a_tile_per_pane_agents_first() {
         let theme = Theme::for_appearance(gpui::WindowAppearance::Dark);
-        let icons = |panes: &[(Option<&str>, Option<&str>)]| marks(panes, &theme).into_iter().map(|m| m.0).collect::<Vec<_>>();
+        let icons = |panes: &[(Option<&str>, Option<&str>)]| marks(panes, None, &theme).into_iter().map(|m| m.0).collect::<Vec<_>>();
         const SHELL: &str = "icons/prompt.svg";
         assert_eq!(icons(&[(None, None), (None, None)]), [SHELL, SHELL]);
         assert_eq!(
@@ -418,6 +425,19 @@ mod tests {
         assert_eq!(icons(&[(None, Some("top"))]), ["icons/solar/pulse.svg"]);
         let many: Vec<_> = ["git", "go", "cargo", "node", "docker", "tmux"].map(|p| (None, Some(p))).to_vec();
         assert_eq!(icons(&many).len(), MAX_MARKS);
+    }
+
+    #[test]
+    fn the_focused_panes_tile_is_on_top() {
+        let theme = Theme::for_appearance(gpui::WindowAppearance::Dark);
+        let icons = |panes: &[(Option<&str>, Option<&str>)], focused| marks(panes, focused, &theme).into_iter().map(|m| m.0).collect::<Vec<_>>();
+        let panes = [(Some("claude"), None), (None, Some("nvim")), (None, None)];
+        assert_eq!(icons(&panes, Some(1)), ["icons/neovim-mark.svg", "icons/claude-mark.svg", "icons/prompt.svg"]);
+        assert_eq!(icons(&panes, Some(2)), ["icons/prompt.svg", "icons/claude-mark.svg", "icons/neovim-mark.svg"]);
+        // past the cap, the focused pane still has its tile
+        let mut many: Vec<_> = ["git", "go", "cargo", "node", "docker"].map(|p| (Some("claude"), Some(p))).to_vec();
+        many.push((None, Some("nvim")));
+        assert_eq!(icons(&many, Some(5))[0], "icons/neovim-mark.svg");
     }
 
     #[test]
