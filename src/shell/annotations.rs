@@ -288,145 +288,168 @@ impl Shell {
             })
     }
 
-    /// The notes under the page, which needs the panel's width, while picking and while picks wait to be sent.
+    /// Under the page and as tall as what it holds, up to 40% of it: while picking with nothing picked, one line that
+    /// says how; then a row each pick (its note, and under it what it points at) over one line with the agent they go
+    /// to, a menu to pick another, and Send (⌘↩).
     pub(super) fn render_annotations(&self, key: &PageKey, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
         let page = self.pages.live.get(key).filter(|p| p.annotations.session.is_some() || !p.annotations.items.is_empty())?;
         let draft = &page.annotations;
+        let panel = div().w_full().max_h(relative(0.4)).flex_none().flex().flex_col().bg(theme.surface).border_t_1().border_color(theme.border).text_size(px(12.));
+        let kbd = |text: &'static str| div().flex_none().px(px(5.)).rounded(px(4.)).bg(theme.wash(0.06)).text_size(px(11.)).text_color(theme.text_faint).child(text);
+        if draft.items.is_empty() {
+            // the page has the keyboard while picking: its script takes the Esc
+            return Some(
+                panel.child(
+                    div()
+                        .h(px(32.))
+                        .px(px(10.))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .text_color(theme.text_muted)
+                        .child(gpui::svg().path("icons/solar/cursor-square.svg").size(px(14.)).flex_none().text_color(theme.accent))
+                        .child(div().flex_1().min_w_0().truncate().child("Click an element or drag over an area"))
+                        .child(kbd("Esc")),
+                ),
+            );
+        }
         let rows: Vec<Stateful<Div>> = draft.items.iter().map(|item| self.annotation_row(key, item, theme, cx)).collect();
-        let hint = draft.items.is_empty().then(|| div().p(px(8.)).text_color(theme.text_faint).child("Click an element or drag over an area."));
-        let chosen = self.recipient(key, cx).map(|p| p.pane_id);
-        let recipients = self.recipients(key, cx);
-        let (heading, empty) = agents_words(SettingsGlobal::of(cx).settings.annotation_agents);
-        let none = recipients.is_empty();
-        let agents = recipients.into_iter().map(|(pane, workspace)| {
-            let (id, picked, key) = (pane.pane_id.clone(), chosen.as_deref() == Some(pane.pane_id.as_str()), key.clone());
-            agent_row(&pane, workspace, picked, theme)
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.pages.recipients.insert(key.clone(), id.clone());
-                    cx.notify();
-                }))
-        });
-        let ready = !none && !draft.sending && !draft.items.is_empty();
-        let (send_key, stop_key) = (key.clone(), key.clone());
+        let chosen = self.recipient(key, cx);
+        let place = chosen.as_ref().and_then(|c| self.recipients(key, cx).into_iter().find(|(p, _)| p.pane_id == c.pane_id)).map(|(_, place)| place);
+        let ready = chosen.is_some() && !draft.sending;
+        let (send_key, key_key) = (key.clone(), key.clone());
+        let menu_open = self.annotation_agents_menu.as_ref().is_some_and(|m| m.is_open());
+        let (_, empty) = agents_words(SettingsGlobal::of(cx).settings.annotation_agents);
+        let recipient = div()
+            .id("annotation-recipient")
+            .flex_1()
+            .min_w_0()
+            .h(px(24.))
+            .px(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .rounded(px(6.))
+            .cursor_pointer()
+            .hover(|s| s.bg(theme.hover))
+            .when(menu_open, |el| el.bg(theme.hover))
+            .tooltip(tip("The agent they go to", None))
+            .relative()
+            .child(super::widgets::anchor_probe(&self.anchors, "annotation-recipient"))
+            .map(|el| match &chosen {
+                Some(pane) => el
+                    .child(status_dot(pane.agent_status, theme))
+                    .child(div().flex_none().text_color(theme.text).child(pane.agent.clone().unwrap_or_default()))
+                    .child(div().min_w_0().truncate().text_color(theme.text_faint).children(place)),
+                None => el.child(div().min_w_0().truncate().text_color(theme.text_faint).child(empty)),
+            })
+            .child(gpui::svg().path("icons/alt-arrow-down.svg").size(px(12.)).flex_none().text_color(theme.text_faint))
+            // capture, like the sidebar's `…`: a press on the open menu's trigger closes it
+            .capture_any_mouse_down(cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                match this.annotation_agents_menu.as_mut() {
+                    Some(menu) if menu.is_open() => menu.close(),
+                    _ => {
+                        let at = this.anchors.borrow().get("annotation-recipient").map_or(e.position, |b| b.origin - gpui::point(px(0.), px(4.)));
+                        this.annotation_agents_menu = Some(crate::ui::Popup::new(at));
+                    }
+                }
+                cx.notify();
+            }));
         let hovered = theme.accent.opacity(0.85);
+        let send = div()
+            .id("annotations-send")
+            .flex_none()
+            .h(px(24.))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .rounded(px(6.))
+            .text_color(if ready { gpui::white() } else { theme.text_faint })
+            .bg(if ready { theme.accent } else { theme.wash(0.06) })
+            .child("Send")
+            .child(div().opacity(0.7).text_size(px(11.)).child(if cfg!(target_os = "macos") { "⌘↩" } else { "Ctrl ↩" }))
+            .when(ready, |el| el.cursor_pointer().hover(move |s| s.bg(hovered)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.send_annotations(&send_key, cx))));
         Some(
-            div()
-                .w_full()
-                .h(relative(0.4))
-                .flex_none()
-                .flex()
-                .flex_col()
-                .bg(theme.surface)
-                .border_t_1()
-                .border_color(theme.border)
-                .text_size(px(12.))
+            panel
                 .capture_key_down(cx.listener(move |this, e: &gpui::KeyDownEvent, _, cx| {
-                    if e.keystroke.key == "escape" && this.annotating(&stop_key) {
+                    let k = &e.keystroke;
+                    if k.key == "escape" && this.annotating(&key_key) {
                         cx.stop_propagation();
-                        this.stop_annotation(&stop_key);
+                        this.stop_annotation(&key_key);
                         cx.notify();
+                    } else if k.key == "enter" && (if cfg!(target_os = "macos") { k.modifiers.platform } else { k.modifiers.control }) {
+                        // before the note's own Enter, a new line
+                        cx.stop_propagation();
+                        this.send_annotations(&key_key, cx);
                     }
                 }))
-                .child(div().id("annotations-list").flex_1().min_h_0().overflow_y_scroll().p(px(8.)).flex().flex_col().gap(px(8.)).children(hint).children(rows))
-                .child(
-                    div()
-                        .id("annotations-agents")
-                        .flex_none()
-                        .max_h(px(160.))
-                        .overflow_y_scroll()
-                        .p(px(8.))
-                        .border_t_1()
-                        .border_color(theme.border)
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .px(px(8.))
-                                .pb(px(2.))
-                                .text_size(px(11.))
-                                .text_color(theme.text_faint)
-                                .child(heading)
-                                .child(
-                                    icon_button(theme, "annotation-agents-view", "")
-                                        .tooltip(tip("Which agents to show", None))
-                                        .size(px(20.))
-                                        .child(gpui::svg().path("icons/more-horizontal.svg").size(px(14.)).text_color(theme.text_faint))
-                                        .when(self.annotation_agents_menu.as_ref().is_some_and(|m| m.is_open()), |el| el.bg(theme.hover))
-                                        .relative()
-                                        .child(super::widgets::anchor_probe(&self.anchors, "annotation-agents-view"))
-                                        // capture, like the sidebar's `…`: a press on the open menu's trigger closes it
-                                        .capture_any_mouse_down(cx.listener(|this, e: &MouseDownEvent, _, cx| {
-                                            cx.stop_propagation();
-                                            match this.annotation_agents_menu.as_mut() {
-                                                Some(menu) if menu.is_open() => menu.close(),
-                                                _ => this.annotation_agents_menu = Some(crate::ui::Popup::new(super::widgets::over(&this.anchors, "annotation-agents-view", e.position))),
-                                            }
-                                            cx.notify();
-                                        })),
-                                ),
-                        )
-                        .children(agents)
-                        .when(none, |el| el.child(div().px(px(8.)).text_color(theme.text_faint).child(empty))),
-                )
-                .child(
-                    div().flex_none().p(px(8.)).pt(px(0.)).child(
-                        div()
-                            .id("annotations-send")
-                            .h(px(32.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(8.))
-                            .text_color(if ready { gpui::white() } else { theme.text_faint })
-                            .bg(if ready { theme.accent } else { theme.wash(0.06) })
-                            .child("Send to agent")
-                            .when(ready, |el| {
-                                el.cursor_pointer().hover(move |s| s.bg(hovered)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.send_annotations(&send_key, cx)))
-                            }),
-                    ),
-                ),
+                .child(div().id("annotations-list").min_h_0().overflow_y_scroll().px(px(10.)).pt(px(8.)).pb(px(4.)).flex().flex_col().gap(px(8.)).children(rows))
+                .child(div().flex_none().h(px(36.)).px(px(4.)).pr(px(8.)).flex().items_center().gap(px(8.)).child(recipient).child(send)),
         )
     }
 
-    /// The panel's `…` menu: which agents it lists.
+    /// The recipient's menu, over its button: the agents to send to, then which agents it lists.
     pub(super) fn annotation_agents_menu(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let menu = self.annotation_agents_menu.as_ref()?;
         let scope = SettingsGlobal::of(cx).settings.annotation_agents;
-        let card = menu_card(theme, "annotation-agents-menu", 160.)
+        let key = self.shown_page(cx).map(|(key, _)| key);
+        let chosen = key.as_ref().and_then(|k| self.recipient(k, cx)).map(|p| p.pane_id);
+        let recipients = key.as_ref().map_or(Vec::new(), |k| self.recipients(k, cx));
+        let (heading, empty) = agents_words(scope);
+        let none = recipients.is_empty();
+        let agents = recipients.into_iter().filter_map(|(pane, place)| {
+            let key = key.clone()?;
+            let (id, picked) = (pane.pane_id.clone(), chosen.as_deref() == Some(pane.pane_id.as_str()));
+            Some(agent_row(&pane, place, picked, theme).rounded(px(6.)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.pages.recipients.insert(key.clone(), id.clone());
+                if let Some(m) = this.annotation_agents_menu.as_mut() {
+                    m.close()
+                }
+                cx.notify();
+            })))
+        });
+        let card = menu_card(theme, "annotation-agents-menu", 280.)
+            .max_w(px(360.))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 if let Some(m) = this.annotation_agents_menu.as_mut() {
                     m.close()
                 }
                 cx.notify();
             }))
+            .child(div().px(px(8.)).py(px(4.)).text_size(px(11.)).text_color(theme.text_faint).child(heading))
+            .children(agents)
+            .when(none, |el| el.child(div().px(px(8.)).py(px(4.)).text_color(theme.text_faint).child(empty)))
+            .child(div().mx(px(-4.)).my(px(4.)).h(px(1.)).bg(theme.border))
             .children(SCOPES.map(|(choice, id, icon, label)| {
-                menu_choice(theme, id, icon, label, scope == choice).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                menu_choice(theme, id, icon, label, scope == choice).on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                     save_from_sidebar(cx, |s| s.annotation_agents = choice);
-                    if let Some(m) = this.annotation_agents_menu.as_mut() {
-                        m.close()
-                    }
                     cx.notify();
                 }))
             }));
         let menu_el = crate::ui::menu_motion("annotation-agents-menu-in", menu, card);
-        Some(gpui::deferred(gpui::anchored().position(menu.value).anchor(gpui::Anchor::BottomRight).snap_to_window_with_margin(px(8.)).child(menu_el)).with_priority(1).into_any_element())
+        Some(gpui::deferred(gpui::anchored().position(menu.value).anchor(gpui::Anchor::BottomLeft).snap_to_window_with_margin(px(8.)).child(menu_el)).with_priority(1).into_any_element())
     }
 
-    /// An annotation's row: hovered, its element's outline deepens on the page.
+    /// A pick's row: its number and note, and under them what it points at; × on hover removes it. Hovered, its
+    /// element's outline deepens on the page.
     fn annotation_row(&self, key: &PageKey, item: &Item, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div> {
         let index = item.annotation.index;
         let (removed, hovered) = (key.clone(), key.clone());
         let hover = theme.hover;
+        let group = SharedString::from(format!("annotation-{index}"));
+        let pointed = match item.annotation.text.trim() {
+            "" => item.annotation.summary(),
+            text => format!("{} · \u{201c}{text}\u{201d}", item.annotation.summary()),
+        };
         div()
-            .id(SharedString::from(format!("annotation-{index}")))
+            .id(group.clone())
+            .group(group.clone())
             .flex_none()
             .flex()
             .flex_col()
-            .gap(px(4.))
+            .gap(px(2.))
             .on_hover(cx.listener(move |this, on: &bool, _, _| {
                 if let Some(page) = this.pages.live.get(&hovered) {
                     let number = if *on { index } else { 0 };
@@ -436,27 +459,29 @@ impl Shell {
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .child(div().flex_none().px(px(5.)).rounded(px(3.)).bg(theme.accent).text_color(gpui::white()).text_size(px(11.)).child(index.to_string()))
-                    .child(div().flex_1().min_w_0().truncate().font_family("Geist Mono").text_size(px(11.)).text_color(theme.text).child(item.annotation.summary()))
+                    .items_start()
+                    .gap(px(8.))
+                    .child(div().flex_none().mt(px(1.)).min_w(px(16.)).px(px(4.)).flex().justify_center().rounded(px(3.)).bg(theme.accent).text_color(gpui::white()).text_size(px(11.)).child(index.to_string()))
+                    .child(div().flex_1().min_w_0().child(Textarea::new(&item.note)))
                     .child(
                         div()
                             .id(SharedString::from(format!("annotation-remove-{index}")))
-                            .size(px(20.))
+                            .size(px(18.))
                             .flex_none()
                             .flex()
                             .items_center()
                             .justify_center()
                             .rounded(px(5.))
+                            .opacity(0.)
+                            .group_hover(group, |s| s.opacity(1.))
                             .cursor_pointer()
                             .hover(move |s| s.bg(hover))
+                            .tooltip(tip("Remove", None))
                             .child(gpui::svg().path("icons/close.svg").size(px(12.)).text_color(theme.text_muted))
                             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.remove_annotation(&removed, index, window, cx))),
                     ),
             )
-            .when(!item.annotation.text.is_empty(), |el| el.child(div().truncate().text_color(theme.text_muted).child(item.annotation.text.clone())))
-            .child(div().px(px(8.)).py(px(5.)).rounded(px(6.)).border_1().border_color(theme.border).bg(theme.wash(0.04)).child(Textarea::new(&item.note)))
+            .child(div().pl(px(24.)).truncate().font_family("Geist Mono").text_size(px(11.)).text_color(theme.text_faint).child(pointed))
     }
 }
 
