@@ -40,25 +40,68 @@ jobs:
     needs: version
     # the SDK it links against picks the window chrome: built with an SDK before 26, the app keeps the old traffic lights
     runs-on: macos-26
-    env:
-      GH_TOKEN: ${{ github.token }}
-      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # the tags, for the release notes
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
       # libghostty-vt (ghostty-vt-sys) builds with Zig 0.16; ZIG=zig wins over .cargo/config.toml's local path.
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
       - run: echo "ZIG=zig" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
+      - run: make lint
+      - run: make test
+
+  # a release's two Mac builds, each on a runner of its own at once: one after the other they were most of a release
+  # (arm64 14 min, then x86_64 10). Each keeps a release build cache of its own, the last release's: then mostly
+  # Shepherd itself builds again, not its dependencies.
+  macos-build:
+    needs: version
+    if: needs.version.outputs.new == 'true'
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - run: echo "ZIG=zig" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/shepherd
+
+  # both builds made one universal app, signed, notarized, packed as a zip and a dmg
+  macos-dist:
+    needs: [version, macos-build]
+    runs-on: macos-26
+    env:
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: build-*-apple-darwin
+          path: target
+      # where `make lipo` looks for them; artifacts lose the executable bit
+      - run: |
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            mkdir -p target/$t/release
+            mv target/build-$t/shepherd target/$t/release/shepherd
+            chmod +x target/$t/release/shepherd
+          done
 
       - name: Signing keychain
-        if: env.MACOS_CERT_P12 != '' && needs.version.outputs.new == 'true'
+        if: env.MACOS_CERT_P12 != ''
         env:
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -78,14 +121,10 @@ jobs:
             --team-id Z7PK4B5KU2 --keychain "$kc"
           echo "NOTARY_KEYCHAIN=$kc" >> "$GITHUB_ENV"
 
-      - run: make lint
-      - run: make test
-      - name: Build, sign, notarize
-        if: needs.version.outputs.new == 'true'
-        run: make ${{ env.MACOS_CERT_P12 != '' && 'notarize' || 'dist' }}
+      - name: Sign, notarize
+        run: make ${{ env.MACOS_CERT_P12 != '' && 'notarize' || 'dist' }} PREBUILT=1
 
       - uses: actions/upload-artifact@v4
-        if: needs.version.outputs.new == 'true'
         with:
           name: Shepherd-macos
           path: |
@@ -201,8 +240,8 @@ jobs:
 
   # out once the Mac and Linux builds are: Windows, slowest to build, joins it in release-windows
   release:
-    needs: [version, macos, linux]
-    if: ${{ !cancelled() && needs.version.outputs.new == 'true' && needs.macos.result == 'success' && needs.linux.result == 'success' }}
+    needs: [version, macos, macos-dist, linux]
+    if: ${{ !cancelled() && needs.version.outputs.new == 'true' && needs.macos.result == 'success' && needs.macos-dist.result == 'success' && needs.linux.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -212,6 +251,7 @@ jobs:
           fetch-depth: 0 # the tags, for the release notes
       - uses: actions/download-artifact@v4
         with:
+          pattern: Shepherd-*
           path: dist
           merge-multiple: true
       - name: Release a new version
