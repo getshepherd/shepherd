@@ -112,7 +112,13 @@ fn block(b: &Block, key: &str, theme: &Theme, look: &Look) -> AnyElement {
             let row = |cells: &[Vec<InlineRun>], r: usize, head: bool| {
                 div().flex().border_t_1().border_color(theme.border).children(cells.iter().enumerate().map(|(c, cell)| {
                     let color = if head { theme.text } else { body };
-                    div().flex_1().min_w_0().px(px(6.)).py(px(4.)).child(text(cell, &format!("{key}-{r}-{c}"), color, head, theme, look))
+                    let key = format!("{key}-{r}-{c}");
+                    // a cell's images drawn as a paragraph's are: a PR's before/after shots are a table of two
+                    let cell = match look.image.is_some() && cell.iter().any(|r| r.style.image.is_some()) {
+                        true => figure(cell, &key, color, theme, look),
+                        false => text(cell, &key, color, head, theme, look),
+                    };
+                    div().flex_1().min_w_0().px(px(6.)).py(px(4.)).child(cell)
                 }))
             };
             div()
