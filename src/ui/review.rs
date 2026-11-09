@@ -327,7 +327,7 @@ pub const ROOT: &str = "Pipeline";
 /// jobs, else the branch's own pipeline, in one GraphQL query; the CLI's user too.
 const GITLAB_QUERY: &str = "query($path: ID!, $branch: String!) { currentUser { username } project(fullPath: $path) { \
     mergeRequests(sourceBranches: [$branch], first: 1, sort: CREATED_DESC) { nodes { \
-    iid title state draft webUrl description targetBranch sourceBranch updatedAt conflicts autoMergeEnabled squash forceRemoveSourceBranch \
+    iid title state draft webUrl description targetBranch sourceBranch updatedAt conflicts detailedMergeStatus autoMergeEnabled squash forceRemoveSourceBranch \
     labels { nodes { title } } diffStatsSummary { additions deletions fileCount } \
     author { username } approved approvedBy { nodes { username } } userPermissions { canApprove } \
     discussions(first: 100) { nodes { resolvable resolved } } \
@@ -394,7 +394,9 @@ pub fn parse_gitlab_review(json: &str, base: &str, path: &str, now: i64) -> Opti
         diff: mr["diffStatsSummary"].as_object().and_then(|d| {
             Some(Diff { files: d.get("fileCount")?.as_u64()?, additions: d.get("additions")?.as_u64()?, deletions: d.get("deletions")?.as_u64()? })
         }),
-        mergeable: mr["conflicts"].as_bool() != Some(true),
+        // `conflicts` is GitLab's last check, false again once the target moves on (CANNOT_BE_MERGED_RECHECK) until
+        // it checks anew; the detailed status says CONFLICT meanwhile, as its own MR page does
+        mergeable: mr["conflicts"].as_bool() != Some(true) && mr["detailedMergeStatus"].as_str() != Some("CONFLICT"),
         can_approve: mr["userPermissions"]["canApprove"].as_bool().unwrap_or(true),
         approved: !me.is_empty() && approvers.iter().any(|a| a == me),
         accepted: mr["approved"].as_bool().unwrap_or(false),
@@ -529,7 +531,9 @@ fn request(v: &Value, json: &str, login: &str, body: &str, viewer: &str) -> Opti
         // GitHub's are objects with a name, glab's REST answer plain strings
         labels: v["labels"].as_array().into_iter().flatten().filter_map(|l| l["name"].as_str().or(l.as_str())).map(String::from).collect(),
         diff: v["changedFiles"].as_u64().zip(v["additions"].as_u64()).zip(v["deletions"].as_u64()).map(|((files, additions), deletions)| Diff { files, additions, deletions }),
-        mergeable: v["mergeable"].as_str() != Some("CONFLICTING") && v["has_conflicts"].as_bool() != Some(true),
+        mergeable: v["mergeable"].as_str() != Some("CONFLICTING")
+            && v["has_conflicts"].as_bool() != Some(true)
+            && v["detailed_merge_status"].as_str() != Some("conflict"),
         can_approve: !me(&v["author"]),
         approved: reviews.iter().any(|r| me(&r["author"]) && r["state"].as_str() == Some("APPROVED")),
         accepted: v["reviewDecision"].as_str() == Some("APPROVED"),
@@ -1779,6 +1783,9 @@ mod tests {
         let r = request.unwrap();
         assert_eq!((r.pr.number, r.pr.state, r.base.as_str(), r.mergeable, r.approved, r.accepted), (402, "open", "develop", true, false, true));
         assert_eq!((r.unresolved, r.auto_merge, r.squash, r.remove_branch), (Some(1), true, true, true));
+        // a conflict GitLab hasn't checked again since the target moved: `conflicts` false, the detailed status not
+        let stale = json.replace(r#""conflicts":false,"#, r#""conflicts":false,"detailedMergeStatus":"CONFLICT","#);
+        assert!(!parse_gitlab_review(&stale, "https://gl", "g/p", 0).unwrap().0.unwrap().mergeable);
         assert_eq!((r.head.as_str(), r.labels.as_slice(), r.diff), ("maps", ["web".to_string()].as_slice(), Some(Diff { files: 3, additions: 10, deletions: 2 })));
         let said: Vec<_> = r.reviewers.iter().map(|rv| (rv.name.as_str(), rv.verdict)).collect();
         assert_eq!(said, [("vlad", Verdict::Changes), ("anna", Verdict::Pending), ("dima", Verdict::Approved)], "an approver who wasn't asked counts too");

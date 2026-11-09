@@ -2691,7 +2691,7 @@ impl Shell {
                     cx.notify();
                 }
             });
-            changes.update(cx, |changes, cx| changes.show(shown.dir.as_deref().filter(|_| here), shown.branch.as_deref().filter(|_| here), here && in_use, cx));
+            changes.update(cx, |changes, cx| changes.show(shown.pane_dir.as_deref().filter(|_| here), shown.pane_branch.as_deref().filter(|_| here), here && in_use, cx));
         }
     }
 
