@@ -252,14 +252,14 @@ pub(super) fn menu_choice(theme: &Theme, id: &'static str, icon: &'static str, l
         .when(checked, |el| el.child(gpui::svg().path("icons/check.svg").size(px(14.)).text_color(theme.text_muted)))
 }
 
-/// Zeron's `TextTooltip`: a one-line chip under the pointer.
-struct Tip(SharedString);
+/// Zeron's `TextTooltip`: a one-line chip under the pointer, wrapping past its width.
+struct Tip(SharedString, Pixels);
 
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
         div()
-            .max_w(px(320.))
+            .max_w(self.1)
             .px(px(9.))
             .py(px(6.))
             .rounded(px(6.))
@@ -281,8 +281,14 @@ pub(crate) fn tip(text: impl Into<SharedString>, action: Option<&'static str>) -
             Some(keys) => format!("{text} · {}", keys.split_whitespace().map(crate::ui::command_panel::glyphs).collect::<Vec<_>>().join(" ")).into(),
             None => text.clone(),
         };
-        cx.new(|_| Tip(text)).into()
+        cx.new(|_| Tip(text, px(320.))).into()
     }
+}
+
+/// `tip` for a path: wider, since a path has no spaces to wrap at and breaks mid-name at the label's width.
+pub(crate) fn path_tip(path: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+    let path: SharedString = path.into();
+    move |_, cx| cx.new(|_| Tip(path.clone(), px(720.))).into()
 }
 
 /// Zeron's titlebar button: 24 px, a 16 px muted icon, a wash on hover. It occludes the drag strip under it.

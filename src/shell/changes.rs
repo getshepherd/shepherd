@@ -1469,7 +1469,19 @@ impl Changes {
             })
             .child(chevron)
             .child(crate::ui::file_icons::icon(&file.path, theme.appearance).size(px(14.0)).flex_none())
-            .child(div().flex_1().min_w_0().truncate().font_family(mono.clone()).text_size(px(13.0)).text_color(theme.text_muted).child(SharedString::from(file.path.clone())))
+            // ponytail: the full path on hover always, not only when it's cut; a cut-only tip needs the text measured
+            .child(
+                div()
+                    .id(SharedString::from(format!("{}-path-{ix}", presentation.key_prefix())))
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(mono.clone())
+                    .text_size(px(13.0))
+                    .text_color(theme.text_muted)
+                    .tooltip(path_tip(file.path.clone()))
+                    .child(SharedString::from(file.path.clone())),
+            )
             .when(file.binary, |el| el.child(div().flex_none().text_size(px(10.0)).text_color(theme.text_faint).child("BIN")))
             .when(adds > 0 || !file.binary, |el| el.child(count_label(format!("+{adds}"), theme.diff_add, theme)))
             .when(dels > 0 || !file.binary, |el| el.child(count_label(format!("−{dels}"), theme.diff_del, theme)))
