@@ -151,6 +151,9 @@ pub struct Shell {
     review_poll: Option<String>,
     /// The shown branch's key at the last render and whether its checks ran: when they stop, CI finished.
     review_last: Option<(String, bool)>,
+    /// The review a `shepherd://review` link picked (the pane shown then, the checkout, the branch), shown in place of
+    /// the pane's own while that pane is.
+    review_pick: Option<(Option<String>, String, String)>,
     /// The CLI calls the review panel's buttons started and that have not finished, by `Check::command`.
     review_acting: std::collections::HashSet<String>,
     /// The pipeline (or workflow) the review panel pages to, picked for a branch's review (its key); else it opens
@@ -560,6 +563,7 @@ impl Shell {
                     right: right_panel::RightPanel::new(SettingsGlobal::of(cx).settings.right_panel_width),
                     review_poll: None,
                     review_last: None,
+                    review_pick: None,
                     review_acting: Default::default(),
                     merge_confirm: None,
                     review_log: None,

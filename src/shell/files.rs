@@ -1397,7 +1397,7 @@ impl Shell {
                     files.keys = here && keys;
                     cx.notify();
                 }
-                files.show(shown.dir.as_deref().filter(|_| here), here && in_use, cx);
+                files.show(shown.pane_dir.as_deref().filter(|_| here), here && in_use, cx);
             });
         }
         for (id, preview) in &self.right.file_tabs {

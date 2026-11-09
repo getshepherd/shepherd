@@ -57,6 +57,8 @@ pub(super) enum PageEvent {
     NewTab(String),
     /// A link to another site, for the system browser.
     Outside(String),
+    /// A `shepherd://review` link: the PR of a branch, by a checkout of its repository, for the review panel.
+    Review { dir: String, branch: String },
     /// One of Shepherd's shortcuts, pressed in the page.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Key(gpui::Keystroke),
@@ -461,6 +463,7 @@ impl Shell {
         };
         let (title, loaded, opened, followed, tabbed) = (send.clone(), send.clone(), send.clone(), send.clone(), send.clone());
         let ready = send.clone();
+        let (reviewed, reviewed_new) = (send.clone(), send.clone());
         #[cfg(target_os = "macos")]
         let key_event = send;
         // a link to another site goes to the browser when the setting says so; anything else stays in the page
@@ -501,6 +504,10 @@ impl Shell {
             .with_document_title_changed_handler(move |t| title(PageEvent::Title(t)))
             .with_on_page_load_handler(move |e, _| loaded(PageEvent::Load(matches!(e, wry::PageLoadEvent::Started))))
             .with_navigation_handler(move |to| {
+                if let Some((dir, branch)) = review_link(&to) {
+                    reviewed(PageEvent::Review { dir, branch });
+                    return false;
+                }
                 let stay = !follows_outside(&to);
                 if !stay {
                     followed(PageEvent::Outside(to));
@@ -508,6 +515,10 @@ impl Shell {
                 stay
             })
             .with_new_window_req_handler(move |to, _| {
+                if let Some((dir, branch)) = review_link(&to) {
+                    reviewed_new(PageEvent::Review { dir, branch });
+                    return wry::NewWindowResponse::Deny;
+                }
                 let event = if opens_outside(&to) { PageEvent::Outside(to) } else { PageEvent::Navigate(to) };
                 opened(event);
                 wry::NewWindowResponse::Deny
@@ -613,6 +624,7 @@ impl Shell {
             }
             PageEvent::Load(started) => page.loading = started,
             PageEvent::Outside(url) => crate::ui::open_outside(&url, cx),
+            PageEvent::Review { dir, branch } => self.pick_review(dir, branch, window, cx),
             // dispatched as if pressed in Shepherd; a menu or dialog it opens takes the keyboard in `sync_pages`
             PageEvent::Key(keystroke) => {
                 // GPUI's focus may be on what the page hides (a pane): the keystroke would start at the window's root,
@@ -1365,5 +1377,35 @@ mod host {
             }
             self.0.removeFromSuperview();
         }
+    }
+}
+
+/// `shepherd://review?dir=<checkout>&branch=<branch>`, as a page's form or `URLSearchParams` writes it: the checkout
+/// and the branch whose PR the review panel shows. Any other link is `None`.
+fn review_link(url: &str) -> Option<(String, String)> {
+    let query = url.strip_prefix("shepherd://review?")?;
+    let mut found = (None, None);
+    for pair in query.split('&') {
+        let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let value = percent_encoding::percent_decode_str(&value.replace('+', " ")).decode_utf8().ok()?.into_owned();
+        match name {
+            "dir" => found.0 = Some(value),
+            "branch" => found.1 = Some(value),
+            _ => {}
+        }
+    }
+    found.0.zip(found.1).filter(|(d, b)| !d.is_empty() && !b.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::review_link;
+
+    #[test]
+    fn reads_review_links() {
+        let link = "shepherd://review?dir=%2FUsers%2Fme%2Fmy+repo&branch=feat%2Fx&url=https%3A%2F%2Fgithub.com%2Fa%2Fb%2Fpull%2F1";
+        assert_eq!(review_link(link), Some(("/Users/me/my repo".into(), "feat/x".into())));
+        assert_eq!(review_link("shepherd://review?dir=%2Fa"), None);
+        assert_eq!(review_link("https://github.com/a/b/pull/1"), None);
     }
 }

@@ -16,11 +16,15 @@ const PAGE_COMMIT: f32 = 60.;
 /// How long after a retry, play or cancel before asking again: the host takes a moment to queue it.
 const SETTLE: Duration = Duration::from_secs(3);
 
-/// The shown pane's branch and its review, for the panel and the status bar.
+/// The shown pane's branch and its review, for the panel and the status bar; or the branch a `shepherd://review` link
+/// picked, while that pane stays shown.
 #[derive(Default)]
 pub(super) struct ShownReview {
     pub dir: Option<String>,
     pub branch: Option<String>,
+    /// The shown pane's own, for the Diffs and Files tabs, which a picked review doesn't move.
+    pub pane_dir: Option<String>,
+    pub pane_branch: Option<String>,
     /// The review cache's key: the directory and the branch, a line apart.
     pub key: Option<String>,
     pub review: Option<Review>,
@@ -89,8 +93,16 @@ impl Shell {
     /// so their end is noticed); when they stop, says how CI went.
     pub(super) fn shown_review(&mut self, snapshot: Option<&Snapshot>, window: &mut Window, cx: &mut Context<Self>) -> ShownReview {
         let pane = self.active_pane(window, cx);
-        let dir = pane_dir(snapshot, pane.as_deref());
-        let branch = dir.as_deref().and_then(|d| branch_of(d, cx));
+        let pane_dir = pane_dir(snapshot, pane.as_deref());
+        let pane_branch = pane_dir.as_deref().and_then(|d| branch_of(d, cx));
+        // a picked review lasts while the pane it was picked over is the shown one
+        if self.review_pick.as_ref().is_some_and(|(p, ..)| *p != pane) {
+            self.review_pick = None;
+        }
+        let (dir, branch) = match &self.review_pick {
+            Some((_, d, b)) => (Some(d.clone()), Some(b.clone())),
+            None => (pane_dir.clone(), pane_branch.clone()),
+        };
         let key = dir.clone().zip(branch.clone()).map(|(d, b)| format!("{d}\n{b}"));
         let ttl = if window.is_window_active() { REVIEW_TTL } else { Duration::MAX };
         let review = key.as_deref().and_then(|k| cached(k, ttl, read_review, cx));
@@ -102,7 +114,18 @@ impl Shell {
                 self.ci_finished(r, branch.as_deref().unwrap_or_default(), pane.as_deref(), window, cx);
             }
         }
-        ShownReview { dir, branch, key, review }
+        ShownReview { dir, branch, pane_dir, pane_branch, key, review }
+    }
+
+    /// Shows the PR of `branch`, in the checkout at `dir`, in the review panel: what a `shepherd://review` link in a
+    /// page asks for (the pull-requests extension's rows), until another pane is shown. A sidebar page hides the panel,
+    /// so the link leaves it for the tabs shown before it, as picking a tab does.
+    pub(super) fn pick_review(&mut self, dir: String, branch: String, window: &Window, cx: &mut Context<Self>) {
+        self.pages.shown = None;
+        self.review_pick = Some((self.active_pane(window, cx), dir, branch));
+        self.review_tab = Tab::Summary;
+        self.update_panel(cx, |p| p.add(crate::right_panel::Surface::PullRequest));
+        cx.notify();
     }
 
     /// A toast when the window is key, else a notification, saying how the shown branch's CI ended.
