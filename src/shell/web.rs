@@ -481,6 +481,12 @@ impl Shell {
             ),
             false => wry::WebViewBuilder::new(),
         };
+        // a browser tab runs the Chrome extensions switched on; sidebar pages and the 3D view stay without them
+        #[cfg(target_os = "macos")]
+        let builder = match browser.then(|| crate::browser_extensions::configuration(&crate::settings::SettingsGlobal::of(cx).settings.browser_extensions)).flatten() {
+            Some(config) => wry::WebViewBuilderExtMacos::with_webview_configuration(builder, config),
+            None => builder,
+        };
         // a device's 3D view: its frames, model and input go over a scheme and IPC of its own
         let builder = match device {
             Some((session, feed)) => super::device::three::attach(builder, session, feed, self.rt.clone(), move || ready(PageEvent::Ready)),
@@ -1218,7 +1224,7 @@ pub(super) fn nav_button(
 }
 
 /// A page's bar button, without its icon, hovered while `enabled`.
-fn nav_frame(theme: &Theme, id: &'static str, enabled: bool) -> Stateful<Div> {
+pub(super) fn nav_frame(theme: &Theme, id: impl Into<gpui::ElementId>, enabled: bool) -> Stateful<Div> {
     let hover = theme.hover;
     div()
         .id(id)

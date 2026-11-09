@@ -18,7 +18,7 @@ pub(super) enum Install {
 }
 
 /// `action`'s pill in `bg`, for the yes of a confirmation; its own, since a second `hover` on one panics.
-fn filled(id: &'static str, label: &'static str, bg: gpui::Hsla, fg: gpui::Hsla) -> Stateful<Div> {
+pub(super) fn filled(id: &'static str, label: &'static str, bg: gpui::Hsla, fg: gpui::Hsla) -> Stateful<Div> {
     div()
         .id(id)
         .flex_none()
@@ -41,6 +41,8 @@ pub(super) enum Tab {
     #[default]
     Installed,
     Pages,
+    /// Chrome extensions in the browser tabs.
+    Browser,
 }
 
 /// A dialog's card: Zeron's, 460 px, on the dialog surface.
@@ -226,7 +228,8 @@ impl SettingsView {
         if !matches!(self.install, Install::Installing) {
             (self.install, self.install_note) = (Install::Idle, None);
         }
-        self.ext_repo.update(cx, |input, cx| input.focus(window, cx));
+        let input = if self.ext_tab == Tab::Browser { &self.bext_input } else { &self.ext_repo };
+        input.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 
@@ -443,6 +446,9 @@ impl SettingsView {
 
     /// The Install dialog over the window: a repo to look up, then the build found to confirm.
     pub(super) fn install_overlay(&self, popup: &crate::ui::Popup<()>, theme: &Theme, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.ext_tab == Tab::Browser {
+            return modal("install", popup, self.browser_install_card(theme, cx), window);
+        }
         let (title, body): (String, String) = match &self.install {
             Install::Confirm(r) => (
                 format!("Install {} {}?", r.repo, r.tag),
@@ -486,6 +492,33 @@ impl SettingsView {
         modal("install", popup, card, window)
     }
 
+    /// The Install dialog of the Browser tab: a Web Store link or id to download, or a folder to load from.
+    fn browser_install_card(&self, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div> {
+        let go = match self.bext_busy {
+            true => filled("bext-install-go", "Installing…", theme.accent.opacity(0.6), theme.on_accent),
+            false => filled("bext-install-go", "Install", theme.accent, theme.on_accent).on_click(cx.listener(|v, _: &ClickEvent, _, cx| v.add_from_store(cx))),
+        };
+        dialog_card(theme, "install-dialog")
+            .gap(px(8.))
+            .on_mouse_down_out(cx.listener(|v, _, _, cx| v.close_install(cx)))
+            .child(div().text_size(px(17.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD).child("Install a browser extension"))
+            .child(div().line_height(px(19.)).text_color(theme.text_muted).child(
+                "Paste its Chrome Web Store link, or its id. It runs in every browser tab with all it asks for, so install only what you trust.",
+            ))
+            .child(div().mt(px(12.)).child(labelled(theme, "Chrome Web Store", field(theme, &self.bext_input).w_full())))
+            .children(self.install_note.clone().map(|n| div().text_size(px(12.)).line_height(px(16.)).text_color(theme.danger).child(n)))
+            .child(
+                div()
+                    .mt(px(16.))
+                    .flex()
+                    .gap(px(8.))
+                    .child(action(theme, "bext-folder", "Choose Folder…").on_click(cx.listener(|v, _: &ClickEvent, _, cx| v.add_folder(cx))))
+                    .child(div().flex_1())
+                    .child(action(theme, "ext-install-cancel", "Cancel").on_click(cx.listener(|v, _: &ClickEvent, _, cx| v.close_install(cx))))
+                    .child(go),
+            )
+    }
+
     /// Zeron's tab: its label and count, underlined when shown.
     fn ext_tab(&self, theme: &Theme, tab: Tab, label: &'static str, count: usize, cx: &mut Context<Self>) -> Stateful<Div> {
         let shown = self.ext_tab == tab;
@@ -513,11 +546,13 @@ impl SettingsView {
     pub(super) fn extensions(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let list = cx.try_global::<Extensions>().map(|e| e.0.clone()).unwrap_or_default();
         let pages = SettingsGlobal::of(cx).settings.web_entries.len();
+        let browser = SettingsGlobal::of(cx).settings.browser_extensions.len();
         let muted = theme.text_muted;
         let (hover, text) = (theme.wash(0.06), theme.text);
         let (label, icon) = match self.ext_tab {
             Tab::Installed => ("Install", "icons/solar/download-minimalistic.svg"),
             Tab::Pages => ("Add page", "icons/solar/add-circle.svg"),
+            Tab::Browser => ("Install", "icons/solar/download-minimalistic.svg"),
         };
         let add = div()
             .id("ext-add")
@@ -535,7 +570,7 @@ impl SettingsView {
             .child(gpui::svg().path(icon).size(px(14.)).text_color(muted))
             .child(label)
             .on_click(cx.listener(|v, _: &ClickEvent, window, cx| match v.ext_tab {
-                Tab::Installed => v.open_install(window, cx),
+                Tab::Installed | Tab::Browser => v.open_install(window, cx),
                 Tab::Pages => update(cx, |s| s.web_entries.push(WebEntry::new())),
             }));
         let tabs = div()
@@ -546,10 +581,12 @@ impl SettingsView {
             .border_color(theme.border.opacity(0.6))
             .child(self.ext_tab(theme, Tab::Installed, "Installed", list.len(), cx))
             .child(self.ext_tab(theme, Tab::Pages, "Web pages", pages, cx))
+            .child(self.ext_tab(theme, Tab::Browser, "Browser", browser, cx))
             .child(div().flex_1())
-            .child(add);
+            .when(self.ext_tab != Tab::Browser || crate::browser_extensions::unavailable().is_none(), |el| el.child(add));
         let body = match self.ext_tab {
             Tab::Pages => self.web_pages(theme, cx),
+            Tab::Browser => self.browser_extensions(theme, cx),
             Tab::Installed => {
                 let empty = list.is_empty();
                 let rows: Vec<Div> = list.into_iter().enumerate().map(|(i, e)| self.extension_row(i, e, theme, cx)).collect();

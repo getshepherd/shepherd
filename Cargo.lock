@@ -6659,6 +6659,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-user-notifications",
  "objc2-video-toolbox",
+ "objc2-web-kit",
  "percent-encoding",
  "prost",
  "ring",

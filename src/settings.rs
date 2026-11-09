@@ -6,6 +6,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// A Chrome extension added to the browser: its unpacked folder (one Shepherd unpacked from the Web Store, or one the
+/// user picked) and whether it loads into the tabs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrowserExtension {
+    pub path: PathBuf,
+    pub on: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -117,6 +125,8 @@ pub struct Settings {
     pub agents_folded: Vec<String>,
     /// Web pages listed in the sidebar above the workspaces and shown in place of the tabs and panes.
     pub web_entries: Vec<WebEntry>,
+    /// Chrome extensions in the browser (`crate::browser_extensions`): each one's folder and whether it loads.
+    pub browser_extensions: Vec<BrowserExtension>,
     /// Links to another site open in the system browser instead of in the page.
     pub web_links_outside: bool,
     /// Web links clicked in a terminal open in a browser tab beside it instead of in the system browser.
@@ -423,6 +433,7 @@ impl Default for Settings {
             folded: Vec::new(),
             agents_folded: Vec::new(),
             web_entries: Vec::new(),
+            browser_extensions: Vec::new(),
             web_links_outside: false,
             web_links_inside: false,
             devices_set_up: false,

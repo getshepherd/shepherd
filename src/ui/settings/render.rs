@@ -38,6 +38,7 @@ impl Render for SettingsView {
         }
         if self.section == Section::Extensions {
             self.load_ext_icons(cx);
+            self.load_browser_info(cx);
         }
         // the number fields follow the setting when it changes elsewhere (a chevron, Cmd+=), even while typed in
         let shown = numbers(&settings);

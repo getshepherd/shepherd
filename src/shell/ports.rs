@@ -11,10 +11,10 @@ const KEY: &str = "ports";
 const EVERY: Duration = Duration::from_secs(2);
 
 impl Shell {
-    /// A blank browser tab in the opened panel: `SHEPHERD_PANEL=browser` for a screenshot.
-    pub fn open_blank_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// A blank browser tab in the opened panel, or one on `url`: `SHEPHERD_PANEL=browser[:url]` for a screenshot.
+    pub fn open_blank_tab(&mut self, url: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(tab) = self.shown_tab() {
-            self.new_browser_tab(tab.workspace_id, None, false, window, cx);
+            self.new_browser_tab(tab.workspace_id, url, false, window, cx);
         }
     }
 

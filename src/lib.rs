@@ -8,6 +8,7 @@ pub mod annotations;
 pub mod assets;
 pub mod backend;
 pub mod bindings;
+pub mod browser_extensions;
 pub mod changes;
 pub mod commands;
 pub mod device;

@@ -324,6 +324,7 @@ impl Shell {
                     .text_size(px(12.5))
                     .child(Input::new(&input)),
             )
+            .children(extension_buttons(theme))
             .child(self.annotate_button(key, theme, cx))
             .child(
                 div()
@@ -346,6 +347,33 @@ impl Shell {
             )
     }
 
+}
+
+/// A button per Chrome extension with an action, left of the bar's own: a click runs it or opens its popup.
+#[cfg(target_os = "macos")]
+fn extension_buttons(theme: &Theme) -> Vec<Stateful<Div>> {
+    let actions = crate::browser_extensions::actions();
+    actions
+        .into_iter()
+        .map(|(path, label, icon)| {
+            let initial = label.chars().next().map(String::from).unwrap_or_default();
+            super::web::nav_frame(theme, gpui::ElementId::Name(format!("browser-ext-{}", path.display()).into()), true)
+                .tooltip(tip(label, None))
+                .child(match icon {
+                    Some(image) => gpui::img(image).size(px(16.)).into_any_element(),
+                    None => div().text_size(px(11.)).text_color(theme.text_muted).child(initial).into_any_element(),
+                })
+                .on_click(move |e, window, _| {
+                    let at = e.position();
+                    crate::browser_extensions::perform_action(&path, window, f64::from(at.x), f64::from(at.y));
+                })
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn extension_buttons(_: &Theme) -> Vec<Stateful<Div>> {
+    Vec::new()
 }
 
 #[cfg(test)]

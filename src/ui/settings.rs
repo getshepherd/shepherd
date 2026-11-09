@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 mod backends;
+mod browser;
 mod extensions;
 mod render;
 mod select;
@@ -174,8 +175,15 @@ pub struct SettingsView {
     /// What GitHub said of each extension installed from it, by name: the release to update to, none when it is up
     /// to date, or why it couldn't tell. `None` until Extensions is shown with extensions in it: asked once a Settings.
     ext_updates: Option<std::collections::HashMap<String, Result<Option<crate::extensions::Release>, String>>>,
-    /// Extensions' tab: the extensions installed, or the web pages added by hand.
+    /// Extensions' tab: the extensions installed, the web pages added by hand, or the browser's extensions.
     ext_tab: extensions::Tab,
+    /// The browser tab's Install field: a Web Store link or id; whether it is downloading.
+    bext_input: Entity<InputState>,
+    bext_busy: bool,
+    /// Each browser extension's manifest as read, by folder.
+    bext_info: std::collections::HashMap<std::path::PathBuf, browser::Shown>,
+    /// The browser extension whose removal waits for a yes.
+    bext_remove: Option<std::path::PathBuf>,
     /// The Install dialog, up or playing its exit.
     install_dialog: Option<crate::ui::Popup<()>>,
     /// The settings dialog of an extension, by name (when it runs, its folder), up or playing its exit.
@@ -227,6 +235,7 @@ pub fn update(cx: &mut App, change: impl FnOnce(&mut Settings)) {
     };
     let saved = settings.save(&path);
     cx.global_mut::<SettingsGlobal>().error = saved.err().map(|e| format!("cannot save {}: {e:#}", path.display()));
+    crate::browser_extensions::sync(&settings.browser_extensions);
     set_binary(settings.herdr_bin.clone());
     crate::hc::set_sync(settings.hc_sync);
     set_socket(settings.herdr_socket.clone());
@@ -311,11 +320,17 @@ impl SettingsView {
 
         let select_search = field(None, "Search", window, cx);
         let ext_repo = field(None, "github.com/owner/repo", window, cx);
+        let bext_input = field(None, "chromewebstore.google.com/detail/…", window, cx);
         let mut subscriptions = vec![cx.subscribe(&ext_repo, |v: &mut Self, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) && matches!(v.install, extensions::Install::Idle) {
                 v.find_release(cx);
             }
         })];
+        subscriptions.push(cx.subscribe(&bext_input, |v: &mut Self, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                v.add_from_store(cx);
+            }
+        }));
         subscriptions.push(cx.subscribe(&select_search, |v: &mut Self, search, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 // a query highlights its first match; the emptied field of an opening select keeps the current option
@@ -407,9 +422,14 @@ impl SettingsView {
                 cx.notify();
             });
         }));
-        // SHEPHERD_SETTINGS=<section> opens a section at launch, for screenshots (like Collie's COLLIE_APP_PAGE).
-        let section = std::env::var("SHEPHERD_SETTINGS")
-            .ok()
+        // SHEPHERD_SETTINGS=<section> opens a section at launch, for screenshots (like Collie's COLLIE_APP_PAGE);
+        // `extensions:browser` opens Extensions on its Browser tab.
+        let asked = std::env::var("SHEPHERD_SETTINGS").unwrap_or_default();
+        let (asked, browser_tab) = match asked.strip_suffix(":browser") {
+            Some(section) => (section.to_string(), true),
+            None => (asked, false),
+        };
+        let section = Some(asked)
             .and_then(|name| Section::ALL.into_iter().find(|s| s.label().eq_ignore_ascii_case(&name)))
             .unwrap_or(Section::General);
         let mut view = SettingsView {
@@ -444,7 +464,11 @@ impl SettingsView {
             ext_remove: None,
             ext_note: None,
             ext_updates: None,
-            ext_tab: Default::default(),
+            ext_tab: if browser_tab { extensions::Tab::Browser } else { Default::default() },
+            bext_input,
+            bext_busy: false,
+            bext_info: Default::default(),
+            bext_remove: None,
             install_dialog: None,
             ext_settings: None,
             ext_icons: Default::default(),
