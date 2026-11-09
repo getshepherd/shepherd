@@ -205,6 +205,8 @@ impl Shell {
             // gpui-base inputs are unstyled: colors from the theme, as Collie does.
             input.set_editor_style(crate::ui::input_style(&theme));
             input.focus(window, cx);
+            // the whole label selected, so typing replaces it and an arrow key keeps it
+            input.select_all(window, cx);
         });
         let events = cx.subscribe_in(&input, window, |shell, _, event: &InputEvent, _, cx| match event {
             InputEvent::PressEnter { .. } => shell.finish_rename(true, cx),
