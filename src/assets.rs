@@ -149,7 +149,6 @@ impl gpui::AssetSource for Assets {
             "uv-mark",
             "ollama-mark",
             "lua-mark",
-            "lucide-check-check",
             "lucide-circle-check",
             "lucide-circle-dashed",
             "lucide-folder-git-2",
