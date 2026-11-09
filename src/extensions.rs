@@ -354,6 +354,7 @@ pub struct Release {
     pub tag: String,
     pub asset: String,
     url: String,
+    api: Option<String>,
 }
 
 /// `owner/repo` from what was typed: that, or the repo's github.com URL (a page in it too).
@@ -393,7 +394,8 @@ fn release_of(repo: &str, json: &serde_json::Value, suffix: &str) -> Result<Rele
         return Err(format!("{repo}'s release {tag} has no build for this computer (a file ending in {suffix})."));
     };
     let url = asset["browser_download_url"].as_str().ok_or("GitHub's answer has no download link")?.to_string();
-    Ok(Release { repo: repo.into(), tag, asset: asset["name"].as_str().unwrap_or_default().into(), url })
+    let api = asset["url"].as_str().map(String::from);
+    Ok(Release { repo: repo.into(), tag, asset: asset["name"].as_str().unwrap_or_default().into(), url, api })
 }
 
 fn agent() -> ureq::Agent {
@@ -419,9 +421,7 @@ pub fn install(release: &Release, start: &str) -> Result<(), String> {
     let since = SystemTime::now() - Duration::from_secs(1);
     let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
     let path = tmp.path().join(&release.asset);
-    let bytes = agent()
-        .get(&release.url)
-        .call()
+    let bytes = crate::update::get_asset(&release.url, release.api.as_deref())
         .and_then(|mut r| r.body_mut().with_config().limit(512 << 20).read_to_vec())
         .map_err(|e| format!("Cannot download {}: {e}", release.asset))?;
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
