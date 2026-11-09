@@ -483,7 +483,7 @@ impl Shell {
         };
         // a browser tab runs the Chrome extensions switched on; sidebar pages and the 3D view stay without them
         #[cfg(target_os = "macos")]
-        let builder = match browser.then(|| crate::browser_extensions::configuration(&crate::settings::SettingsGlobal::of(cx).settings.browser_extensions)).flatten() {
+        let builder = match browser.then(|| crate::browser_extensions::configuration(cx)).flatten() {
             Some(config) => wry::WebViewBuilderExtMacos::with_webview_configuration(builder, config),
             None => builder,
         };

@@ -575,6 +575,9 @@ impl SettingsView {
             }));
         let tabs = div()
             .mt(px(28.))
+            // the add button's height, margin and the border under it, kept on the Browser tab where the button is hidden,
+            // so the tabs don't move
+            .min_h(px(37.))
             .flex()
             .items_end()
             .border_b_1()

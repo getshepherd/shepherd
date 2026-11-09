@@ -169,6 +169,9 @@ mod webkit {
         errors: HashMap<PathBuf, String>,
         /// Each loaded extension's action icon, once drawn.
         icons: HashMap<PathBuf, Option<Arc<gpui::Image>>>,
+        /// Told when an extension has loaded or failed to: WebKit reads them after the tab is drawn, so the browser
+        /// bar's buttons and Settings' "Didn't load" would otherwise wait for some other redraw.
+        settled: Option<futures::channel::mpsc::UnboundedSender<()>>,
     }
 
     thread_local! {
@@ -182,22 +185,38 @@ mod webkit {
 
     /// A browser tab's configuration, with the extensions' controller on it; `None` where extensions don't run.
     /// The data store is the one wry gives a tab made without a configuration, so cookies and logins carry on.
-    /// `list` is the extensions in the settings, loaded with the first tab.
-    pub fn configuration(list: &[BrowserExtension]) -> Option<Retained<WKWebViewConfiguration>> {
+    /// The extensions in the settings load with the first tab.
+    pub fn configuration(cx: &mut gpui::App) -> Option<Retained<WKWebViewConfiguration>> {
+        use futures::StreamExt;
         let mtm = MainThreadMarker::new()?;
         if !supported() {
             return None;
         }
-        let controller = STATE.with_borrow_mut(|state| {
-            state
+        let (controller, settled) = STATE.with_borrow_mut(|state| {
+            let first = state.controller.is_none();
+            let controller = state
                 .controller
                 .get_or_insert_with(|| unsafe {
                     let config = WKWebExtensionControllerConfiguration::defaultConfiguration(mtm);
                     WKWebExtensionController::initWithConfiguration(WKWebExtensionController::alloc(mtm), &config)
                 })
-                .clone()
+                .clone();
+            let settled = first.then(|| {
+                let (tx, rx) = futures::channel::mpsc::unbounded();
+                state.settled = Some(tx);
+                rx
+            });
+            (controller, settled)
         });
-        sync(list);
+        if let Some(mut settled) = settled {
+            cx.spawn(async move |cx| {
+                while settled.next().await.is_some() {
+                    cx.update(|cx| cx.refresh_windows());
+                }
+            })
+            .detach();
+        }
+        sync(&crate::settings::SettingsGlobal::of(cx).settings.browser_extensions);
         unsafe {
             let config = WKWebViewConfiguration::new(mtm);
             config.setWebsiteDataStore(&WKWebsiteDataStore::defaultDataStore(mtm));
@@ -257,6 +276,9 @@ mod webkit {
                         eprintln!("shepherd: browser extension {} didn't load: {why}", at.display());
                         state.errors.insert(at.clone(), why);
                     }
+                }
+                if let Some(settled) = &state.settled {
+                    let _ = settled.unbounded_send(());
                 }
             });
         });
