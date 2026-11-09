@@ -335,6 +335,9 @@ impl Shell {
         }
         if self.ensure_page(&id, window, cx) {
             self.pages.shown = Some(id);
+            if let Some((key, _)) = self.shown_page(cx) {
+                self.tell_extension(&key, window, cx);
+            }
             cx.notify();
         }
     }
@@ -635,7 +638,12 @@ impl Shell {
                     cx.background_spawn(async move { crate::web::Seen::default().keep_title(&mark, &url, &title) }).detach();
                 }
             }
-            PageEvent::Load(started) => page.loading = started,
+            PageEvent::Load(started) => {
+                page.loading = started;
+                if !started {
+                    self.tell_extension(&key, window, cx);
+                }
+            }
             PageEvent::Outside(url) => crate::ui::open_outside(&url, cx),
             PageEvent::Review { dir, branch } => self.pick_review(dir, branch, window, cx),
             // dispatched as if pressed in Shepherd; a menu or dialog it opens takes the keyboard in `sync_pages`
@@ -977,6 +985,14 @@ impl Shell {
             });
         })
         .detach();
+    }
+
+    /// Tells page `key`, when it is an extension's, the folder of the pane shown under it (see
+    /// `extensions::state_script`).
+    fn tell_extension(&self, key: &PageKey, window: &Window, cx: &mut App) {
+        let (Some(ext), Some(page)) = (crate::extensions::by_page(cx, &key.0), self.pages.live.get(key)) else { return };
+        let dir = crate::ui::statusbar::pane_dir(self.snapshot.as_ref(), self.active_pane(window, cx).as_deref());
+        let _ = page.view.evaluate_script(&crate::extensions::state_script(&ext.origin(), dir.as_deref()));
     }
 
     /// The extensions' open pages put on the theme now in force, without a reload.

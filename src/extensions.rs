@@ -529,6 +529,14 @@ pub fn theme_script(theme: &Theme, origin: &str) -> String {
     )
 }
 
+/// The script that tells a page of the extension at `origin` what Shepherd shows: `window.shepherd`, and a `shepherd`
+/// event on `window` with the same as its `detail`. `dir` is the folder of the pane shown last (none when no pane is),
+/// what a page that lists something per project goes to. Sent once it loads and each time it is shown.
+pub fn state_script(origin: &str, dir: Option<&str>) -> String {
+    let (state, origin) = (serde_json::json!({ "dir": dir }), serde_json::Value::from(origin));
+    format!("location.origin === {origin} && (window.shepherd = {state}, dispatchEvent(new CustomEvent('shepherd', {{ detail: window.shepherd }})));")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -676,5 +684,7 @@ mod tests {
         assert!(script.contains("\"--shell\":\"#0d1017\""));
         assert!(script.contains("colorScheme = 'dark'"));
         assert!(script.contains("!== \"http://127.0.0.1:5000\""));
+        let state = state_script("http://127.0.0.1:5000", Some("/a b"));
+        assert!(state.starts_with("location.origin === \"http://127.0.0.1:5000\" && (window.shepherd = {\"dir\":\"/a b\"}"), "{state}");
     }
 }
