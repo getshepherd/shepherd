@@ -121,6 +121,36 @@ pub fn remove_files(path: &Path) {
     }
 }
 
+/// The Chrome APIs WebKit lacks, as do-nothing stand-ins a Chrome extension's background finds before its own code.
+const SHIM: &str = include_str!("../assets/browser-extension-shim.js");
+const SHIM_FILE: &str = "shepherd_shim.js";
+const WRAPPER_FILE: &str = "shepherd_background.js";
+
+/// Puts [`SHIM`] before the background service worker of the extension in `folder`: writes the shim at its root and,
+/// beside the worker's script (so the script's own relative imports resolve as before), a wrapper that loads the
+/// shim and then that script; `manifest.json` then names the wrapper. The wrapper keeps the script's path, so on a
+/// folder done before only the shim is written again (a newer Shepherd's).
+// ponytail: only a service worker is wrapped, the one background Chrome takes since MV3; an MV2 page or scripts run as is
+pub fn prepare(folder: &Path) -> std::io::Result<()> {
+    std::fs::write(folder.join(SHIM_FILE), SHIM)?;
+    let path = folder.join("manifest.json");
+    let mut manifest: serde_json::Value = serde_json::from_str(std::fs::read_to_string(&path)?.trim_start_matches('\u{feff}'))?;
+    let Some(script) = manifest["background"]["service_worker"].as_str().map(|s| s.trim_start_matches('/').to_string()) else { return Ok(()) };
+    let (at, file) = script.rsplit_once('/').map_or((None, script.as_str()), |(at, file)| (Some(at), file));
+    if file == WRAPPER_FILE {
+        return Ok(());
+    }
+    // the file's name as a JS string, quoted and escaped
+    let name = serde_json::to_string(&format!("./{file}"))?;
+    let wrapper = match manifest["background"]["type"].as_str() {
+        Some("module") => format!("import '/{SHIM_FILE}';\nimport {name};\n"),
+        _ => format!("importScripts('/{SHIM_FILE}', {name});\n"),
+    };
+    std::fs::write(folder.join(at.unwrap_or_default()).join(WRAPPER_FILE), wrapper)?;
+    manifest["background"]["service_worker"] = at.map_or(WRAPPER_FILE.into(), |at| format!("{at}/{WRAPPER_FILE}")).into();
+    std::fs::write(&path, serde_json::to_string_pretty(&manifest)?)
+}
+
 /// What Settings shows of an extension, from its manifest.
 #[derive(Clone)]
 pub struct Info {
@@ -466,6 +496,12 @@ mod webkit {
     /// Reads the extension in `path` (WebKit does it off the main thread), then loads it if it is still wanted.
     fn read(path: PathBuf, controller: Retained<WKWebExtensionController>) {
         let Some(mtm) = MainThreadMarker::new() else { return };
+        // a folder the user picked is theirs (an extension they work on), so only the Web Store's get the shim
+        if path.starts_with(super::dir())
+            && let Err(e) = super::prepare(&path)
+        {
+            eprintln!("shepherd: couldn't put the shim into browser extension {}: {e}", path.display());
+        }
         let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&path.to_string_lossy()), true);
         let at = path.clone();
         let done = RcBlock::new(move |extension: *mut WKWebExtension, error: *mut NSError| {
@@ -645,6 +681,30 @@ mod tests {
         assert_eq!(strip_crx(&crx2).unwrap(), zip);
         assert!(strip_crx(b"PK\x03\x04").is_err());
         assert!(strip_crx(b"Cr24\x03\0\0\0\xff\0\0\0").is_err());
+    }
+
+    #[test]
+    fn wraps_backgrounds_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (module, classic) = (dir.path().join("module"), dir.path().join("classic"));
+        std::fs::create_dir_all(module.join("bg")).unwrap();
+        std::fs::create_dir_all(&classic).unwrap();
+        let manifest = |folder: &Path| serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(folder.join("manifest.json")).unwrap()).unwrap();
+        std::fs::write(module.join("manifest.json"), r#"{"name":"m","background":{"service_worker":"bg/main.js","type":"module"}}"#).unwrap();
+        std::fs::write(classic.join("manifest.json"), "\u{feff}{\"name\":\"c\",\"background\":{\"service_worker\":\"/background.js\"}}").unwrap();
+        for _ in 0..2 {
+            prepare(&module).unwrap();
+            prepare(&classic).unwrap();
+            assert_eq!(manifest(&module)["background"]["service_worker"], "bg/shepherd_background.js");
+            assert_eq!(std::fs::read_to_string(module.join("bg/shepherd_background.js")).unwrap(), "import '/shepherd_shim.js';\nimport \"./main.js\";\n");
+            assert_eq!(manifest(&classic)["background"]["service_worker"], "shepherd_background.js");
+            assert_eq!(std::fs::read_to_string(classic.join("shepherd_background.js")).unwrap(), "importScripts('/shepherd_shim.js', \"./background.js\");\n");
+            assert_eq!(std::fs::read_to_string(classic.join("shepherd_shim.js")).unwrap(), SHIM);
+        }
+        // no background, nothing but the shim
+        std::fs::write(classic.join("manifest.json"), r#"{"name":"c"}"#).unwrap();
+        prepare(&classic).unwrap();
+        assert_eq!(manifest(&classic), serde_json::json!({"name": "c"}));
     }
 
     /// Live: downloads Dark Reader from the Chrome Web Store into `dir()`. Give it settings of its own, as
