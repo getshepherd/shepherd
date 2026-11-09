@@ -41,8 +41,6 @@ pub(super) enum Tab {
     #[default]
     Installed,
     Pages,
-    /// Chrome extensions in the browser tabs.
-    Browser,
 }
 
 /// A dialog's card: Zeron's, 460 px, on the dialog surface.
@@ -228,7 +226,7 @@ impl SettingsView {
         if !matches!(self.install, Install::Installing) {
             (self.install, self.install_note) = (Install::Idle, None);
         }
-        let input = if self.ext_tab == Tab::Browser { &self.bext_input } else { &self.ext_repo };
+        let input = if self.section == super::Section::Browser { &self.bext_input } else { &self.ext_repo };
         input.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
@@ -446,7 +444,7 @@ impl SettingsView {
 
     /// The Install dialog over the window: a repo to look up, then the build found to confirm.
     pub(super) fn install_overlay(&self, popup: &crate::ui::Popup<()>, theme: &Theme, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.ext_tab == Tab::Browser {
+        if self.section == super::Section::Browser {
             return modal("install", popup, self.browser_install_card(theme, cx), window);
         }
         let (title, body): (String, String) = match &self.install {
@@ -492,7 +490,7 @@ impl SettingsView {
         modal("install", popup, card, window)
     }
 
-    /// The Install dialog of the Browser tab: a Web Store link or id to download, or a folder to load from.
+    /// The Install dialog of Browser's extensions: a Web Store link or id to download, or a folder to load from.
     fn browser_install_card(&self, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div> {
         let go = match self.bext_busy {
             true => filled("bext-install-go", "Installing…", theme.accent.opacity(0.6), theme.on_accent),
@@ -546,13 +544,11 @@ impl SettingsView {
     pub(super) fn extensions(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let list = cx.try_global::<Extensions>().map(|e| e.0.clone()).unwrap_or_default();
         let pages = SettingsGlobal::of(cx).settings.web_entries.len();
-        let browser = SettingsGlobal::of(cx).settings.browser_extensions.len();
         let muted = theme.text_muted;
         let (hover, text) = (theme.wash(0.06), theme.text);
         let (label, icon) = match self.ext_tab {
             Tab::Installed => ("Install", "icons/solar/download-minimalistic.svg"),
             Tab::Pages => ("Add page", "icons/solar/add-circle.svg"),
-            Tab::Browser => ("Install", "icons/solar/download-minimalistic.svg"),
         };
         let add = div()
             .id("ext-add")
@@ -570,26 +566,21 @@ impl SettingsView {
             .child(gpui::svg().path(icon).size(px(14.)).text_color(muted))
             .child(label)
             .on_click(cx.listener(|v, _: &ClickEvent, window, cx| match v.ext_tab {
-                Tab::Installed | Tab::Browser => v.open_install(window, cx),
+                Tab::Installed => v.open_install(window, cx),
                 Tab::Pages => update(cx, |s| s.web_entries.push(WebEntry::new())),
             }));
         let tabs = div()
             .mt(px(28.))
-            // the add button's height, margin and the border under it, kept on the Browser tab where the button is hidden,
-            // so the tabs don't move
-            .min_h(px(37.))
             .flex()
             .items_end()
             .border_b_1()
             .border_color(theme.border.opacity(0.6))
             .child(self.ext_tab(theme, Tab::Installed, "Installed", list.len(), cx))
             .child(self.ext_tab(theme, Tab::Pages, "Web pages", pages, cx))
-            .child(self.ext_tab(theme, Tab::Browser, "Browser", browser, cx))
             .child(div().flex_1())
-            .when(self.ext_tab != Tab::Browser || crate::browser_extensions::unavailable().is_none(), |el| el.child(add));
+            .child(add);
         let body = match self.ext_tab {
             Tab::Pages => self.web_pages(theme, cx),
-            Tab::Browser => self.browser_extensions(theme, cx),
             Tab::Installed => {
                 let empty = list.is_empty();
                 let rows: Vec<Div> = list.into_iter().enumerate().map(|(i, e)| self.extension_row(i, e, theme, cx)).collect();

@@ -47,6 +47,7 @@ enum Section {
     Notifications,
     Usage,
     Extensions,
+    Browser,
     Backend,
     Worktrees,
     Shortcuts,
@@ -54,18 +55,26 @@ enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 10] = [
+    /// In the order of the column, which j/k and ↓/↑ follow too.
+    const ALL: [Section; 11] = [
         Section::General,
-        Section::Terminal,
         Section::Appearance,
         Section::Notifications,
-        Section::Usage,
-        Section::Extensions,
-        Section::Backend,
-        Section::Worktrees,
         Section::Shortcuts,
+        Section::Terminal,
+        Section::Browser,
+        Section::Worktrees,
+        Section::Extensions,
+        Section::Usage,
+        Section::Backend,
         Section::About,
     ];
+
+    /// The first of a group in the column, set apart from the one above: the app itself; what the window holds; what
+    /// Shepherd talks to; About.
+    fn starts_group(self) -> bool {
+        matches!(self, Section::Terminal | Section::Extensions | Section::About)
+    }
 
     fn label(self) -> &'static str {
         match self {
@@ -75,6 +84,7 @@ impl Section {
             Section::Notifications => "Notifications",
             Section::Usage => "Usage",
             Section::Extensions => "Extensions",
+            Section::Browser => "Browser",
             Section::Backend => "Backend",
             Section::Worktrees => "Worktrees",
             Section::Shortcuts => "Shortcuts",
@@ -89,7 +99,8 @@ impl Section {
             Section::Appearance => "icons/tuning.svg",
             Section::Notifications => "icons/bell.svg",
             Section::Usage => "icons/clock-circle.svg",
-            Section::Extensions => "icons/solar/global.svg",
+            Section::Extensions => "icons/solar/widget-add.svg",
+            Section::Browser => "icons/solar/global.svg",
             Section::Backend => "icons/solar/server-2.svg",
             Section::Worktrees => "icons/git-branch.svg",
             Section::Shortcuts => "icons/keyboard.svg",
@@ -175,9 +186,9 @@ pub struct SettingsView {
     /// What GitHub said of each extension installed from it, by name: the release to update to, none when it is up
     /// to date, or why it couldn't tell. `None` until Extensions is shown with extensions in it: asked once a Settings.
     ext_updates: Option<std::collections::HashMap<String, Result<Option<crate::extensions::Release>, String>>>,
-    /// Extensions' tab: the extensions installed, the web pages added by hand, or the browser's extensions.
+    /// Extensions' tab: the extensions installed, or the web pages added by hand.
     ext_tab: extensions::Tab,
-    /// The browser tab's Install field: a Web Store link or id; whether it is downloading.
+    /// Browser's Install field for an extension: a Web Store link or id; whether it is downloading.
     bext_input: Entity<InputState>,
     bext_busy: bool,
     /// Each browser extension's manifest as read, by folder.
@@ -422,14 +433,9 @@ impl SettingsView {
                 cx.notify();
             });
         }));
-        // SHEPHERD_SETTINGS=<section> opens a section at launch, for screenshots (like Collie's COLLIE_APP_PAGE);
-        // `extensions:browser` opens Extensions on its Browser tab.
-        let asked = std::env::var("SHEPHERD_SETTINGS").unwrap_or_default();
-        let (asked, browser_tab) = match asked.strip_suffix(":browser") {
-            Some(section) => (section.to_string(), true),
-            None => (asked, false),
-        };
-        let section = Some(asked)
+        // SHEPHERD_SETTINGS=<section> opens a section at launch, for screenshots (like Collie's COLLIE_APP_PAGE).
+        let section = std::env::var("SHEPHERD_SETTINGS")
+            .ok()
             .and_then(|name| Section::ALL.into_iter().find(|s| s.label().eq_ignore_ascii_case(&name)))
             .unwrap_or(Section::General);
         let mut view = SettingsView {
@@ -464,7 +470,7 @@ impl SettingsView {
             ext_remove: None,
             ext_note: None,
             ext_updates: None,
-            ext_tab: if browser_tab { extensions::Tab::Browser } else { Default::default() },
+            ext_tab: Default::default(),
             bext_input,
             bext_busy: false,
             bext_info: Default::default(),

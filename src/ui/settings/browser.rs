@@ -1,5 +1,6 @@
-//! Settings → Extensions → Browser: the Chrome extensions in the browser tabs (`crate::browser_extensions`), each a row
-//! with its icon, name and version, a switch and the bin; the Install dialog takes a Web Store link or id, or a folder.
+//! Settings → Browser: where links open, and the Chrome extensions in the browser tabs (`crate::browser_extensions`), each
+//! a row with its icon, name and version, a switch and the bin; the Install dialog takes a Web Store link or id, or a
+//! folder.
 use super::*;
 use crate::browser_extensions as bext;
 use crate::settings::BrowserExtension;
@@ -169,16 +170,43 @@ impl SettingsView {
         row.child(text).child(div().flex_none().flex().items_center().gap(px(8.)).children(version).child(power).child(remove))
     }
 
-    /// The Browser tab's card: the extensions added, or why none can run here.
-    pub(super) fn browser_extensions(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+    /// The Browser page: Links (from a sidebar page, from a terminal), then the extensions.
+    pub(super) fn browser_page(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+        div()
+            .child(page_header(theme, "Browser", "Pages in the sidebar and browser tabs beside the terminal: where links open, and Chrome extensions."))
+            .child(self.links(theme, cx))
+            .child(self.browser_extensions(theme, cx))
+    }
+
+    /// Extensions' label with Install beside it (where they can run), and its card: the extensions added, or why none
+    /// can run here.
+    fn browser_extensions(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let list = SettingsGlobal::of(cx).settings.browser_extensions.clone();
         let rows: Vec<Div> = list.iter().enumerate().map(|(i, e)| self.browser_row(i, e, theme, cx)).collect();
         let empty = match bext::unavailable() {
             Some(why) => Some(("Browser extensions aren't available", why)),
             None => rows.is_empty().then_some(("No browser extensions yet", "Install one from the Chrome Web Store, or an unpacked one from a folder.")),
         };
+        let (muted, hover, text) = (theme.text_muted, theme.wash(0.06), theme.text);
+        let install = div()
+            .id("bext-install")
+            .h(px(24.))
+            .px(px(8.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .rounded(px(7.))
+            .text_color(muted)
+            .cursor_pointer()
+            .hover(move |s| s.bg(hover).text_color(text))
+            .child(gpui::svg().path("icons/solar/download-minimalistic.svg").size(px(14.)).text_color(muted))
+            .child("Install")
+            .on_click(cx.listener(|v, _: &ClickEvent, window, cx| v.open_install(window, cx)));
+        // the label's own margins, with Install level with it and taking none of its height
+        let label = section_label(theme, "Extensions").flex().items_center().justify_between().h(px(17.)).child(div().mr(px(-8.)).when(bext::unavailable().is_none(), |el| el.child(install)));
         div()
-            .child(card(theme).mt(px(16.)).children(rows).children(empty.map(|(title, body)| card_row(theme, list.is_empty()).child(row_text(theme, title, body)))))
+            .child(label)
+            .child(card(theme).mt_0().children(rows).children(empty.map(|(title, body)| card_row(theme, list.is_empty()).child(row_text(theme, title, body)))))
             .children(self.ext_note.clone().map(|n| note(theme, n)))
     }
 }

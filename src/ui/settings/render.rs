@@ -38,6 +38,8 @@ impl Render for SettingsView {
         }
         if self.section == Section::Extensions {
             self.load_ext_icons(cx);
+        }
+        if self.section == Section::Browser {
             self.load_browser_info(cx);
         }
         // the number fields follow the setting when it changes elsewhere (a chevron, Cmd+=), even while typed in
@@ -82,6 +84,7 @@ impl Render for SettingsView {
                 |section| {
                     let selected = self.section == section;
                     crate::shell::row(&theme, selected, SharedString::from(format!("settings-{}", section.label())))
+                        .when(section.starts_group(), |el| el.mt(px(14.)))
                         .text_color(if selected { theme.text } else { theme.text_muted })
                         .when(selected, |el| el.font_weight(FontWeight::MEDIUM))
                         .child(crate::ui::icon(section.icon(), 16., theme.text_muted))
@@ -143,7 +146,7 @@ impl Render for SettingsView {
                             |_, _: &ClickEvent, _, cx| update(cx, |s| s.secure_input = !s.secure_input),
                         )),
                     )),
-            ).child(self.links(&theme, cx)),
+            ),
             Section::Terminal => div()
                 .child(page_header(&theme, "Terminal", "The font every pane draws with."))
                 .child(
@@ -408,6 +411,7 @@ impl Render for SettingsView {
                     "Tools with a page in the sidebar, above the workspaces, and a CLI for agents; and web pages of your own.",
                 ))
                 .child(self.extensions(&theme, cx)),
+            Section::Browser => self.browser_page(&theme, cx),
             Section::Worktrees => self.worktrees_page(&theme, cx),
             Section::Backend => div()
                 .child(page_header(&theme, "Backend", "What runs the terminals. Shepherd shows one at a time, with its own workspaces."))
