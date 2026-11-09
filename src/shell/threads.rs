@@ -63,7 +63,8 @@ impl Shell {
         let field = div()
             .flex_1()
             .min_w_0()
-            .h(px(32.))
+            // the height of the buttons beside it
+            .h(px(28.))
             .px(px(8.))
             .flex()
             .items_center()
@@ -131,12 +132,13 @@ impl Shell {
         let current = SettingsGlobal::of(cx).settings.thread_project.clone();
         let projects: Vec<&Workspace> = snapshot.map(|s| crate::model::groups(s.workspace_tree()).into_iter().map(|(w, _)| w).collect()).unwrap_or_default();
         let shown = projects.iter().any(|w| current.as_deref() == Some(w.workspace_id.as_str()));
-        let choice = |id: SharedString, art: gpui::AnyElement, label: String, checked: bool, pick: Option<String>, cx: &mut Context<Self>| {
+        let choice = |id: SharedString, art: gpui::AnyElement, label: String, busy: Option<gpui::AnyElement>, checked: bool, pick: Option<String>, cx: &mut Context<Self>| {
             row(theme, false, id)
                 .h(px(28.))
                 .rounded(px(6.))
                 .child(art)
                 .child(div().flex_1().min_w_0().truncate().child(label))
+                .children(busy)
                 .when(checked, |el| el.child(gpui::svg().path("icons/check.svg").size(px(14.)).flex_none().text_color(theme.text_muted)))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     if let Some(m) = this.project_menu.as_mut() { m.close() }
@@ -146,12 +148,13 @@ impl Shell {
                 }))
         };
         let folder = gpui::svg().path("icons/folder.svg").size(px(14.)).flex_none().text_color(theme.text_muted).into_any_element();
-        let all = choice("project-menu-all".into(), folder, "All projects".into(), !shown, None, cx);
+        let all = choice("project-menu-all".into(), folder, "All projects".into(), None, !shown, None, cx);
         let rows: Vec<_> = projects
             .iter()
             .map(|w| {
                 let art = project_art(w, snapshot, 14., false, theme, cx);
-                choice(SharedString::from(format!("project-menu-{}", w.workspace_id)), art, w.label.clone(), current.as_deref() == Some(w.workspace_id.as_str()), Some(w.workspace_id.clone()), cx)
+                let busy = snapshot.and_then(|s| project_busy(s, &w.workspace_id, theme));
+                choice(SharedString::from(format!("project-menu-{}", w.workspace_id)), art, w.label.clone(), busy, current.as_deref() == Some(w.workspace_id.as_str()), Some(w.workspace_id.clone()), cx)
             })
             .collect();
         Some(
@@ -168,6 +171,12 @@ impl Shell {
             )))
             .with_priority(1),
         )
+    }
+
+    /// The project select open under its button, as a press on it opens it: `SHEPHERD_PANEL=projects` for a screenshot.
+    pub fn open_project_menu(&mut self, cx: &mut Context<Self>) {
+        self.project_menu = Some(crate::ui::Popup::new(super::widgets::under(&self.anchors, "thread-filter", gpui::point(px(160.), px(80.)))));
+        cx.notify();
     }
 
     /// Worktrees being made, the agents that want you, then the shelves, pushed down to the bottom of the column.
@@ -435,6 +444,30 @@ pub(super) fn search_field(window: &mut Window, cx: &mut Context<Shell>) -> (Ent
         }
     });
     (input, events)
+}
+
+/// What the project select says at a project's right about its agents: the ones waiting for you, else the working
+/// ones, with a card's icon and color for the status and how many there are past one; nothing when neither.
+fn project_busy(snapshot: &Snapshot, project: &str, theme: &Theme) -> Option<gpui::AnyElement> {
+    let agents = snapshot.agents_in(project, crate::model::AgentScope::Project);
+    let (status, n) = [AgentStatus::Blocked, AgentStatus::Working]
+        .into_iter()
+        .map(|s| (s, agents.iter().filter(|p| p.agent_status == s).count()))
+        .find(|(_, n)| *n > 0)?;
+    let (icon, _) = status_mark(status)?;
+    let color = status_color(status, theme).unwrap_or(theme.text_muted);
+    Some(
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(3.))
+            .text_size(px(11.))
+            .text_color(color)
+            .child(gpui::svg().path(icon).size(px(14.)).flex_none().text_color(color))
+            .when(n > 1, |el| el.child(n.to_string()))
+            .into_any_element(),
+    )
 }
 
 /// A project's artwork or monogram, as the workspace list draws it.
