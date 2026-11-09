@@ -477,6 +477,18 @@ mod webkit {
         }) else {
             return;
         };
+        // WebKit's tracking prevention (ITP) clears, a few seconds after launch, the data of every site nobody
+        // interacted with, an extension's own origin among them, and with it the registration of its background
+        // service worker: the worker stops, and the extension's context, unaware, never wakes it again, so each
+        // message from then on gets `undefined`. Extensions' pages share the tabs' data store (and so their cookies, as
+        // in Chrome), so tracking prevention goes for the tabs too while any extension is on.
+        // ponytail: private WebKit; it stays off until Shepherd quits once switched off
+        if !wanted.is_empty() && let Some(mtm) = MainThreadMarker::new() {
+            let store = unsafe { WKWebsiteDataStore::defaultDataStore(mtm) };
+            if store.respondsToSelector(objc2::sel!(_setResourceLoadStatisticsEnabled:)) {
+                let _: () = unsafe { msg_send![&*store, _setResourceLoadStatisticsEnabled: false] };
+            }
+        }
         let gone: Vec<_> = STATE.with_borrow_mut(|state| {
             let paths: Vec<PathBuf> = state.loaded.keys().filter(|p| !wanted.contains(p)).cloned().collect();
             paths.iter().for_each(|p| drop(state.icons.remove(p)));
@@ -539,8 +551,13 @@ mod webkit {
         }
         unsafe {
             let context = WKWebExtensionContext::contextForExtension(extension);
-            // the same id each launch, so what it stored (chrome.storage, its own pages' data) is there again
+            // the same id each launch, so what it stored (chrome.storage) is there again
             context.setUniqueIdentifier(&NSString::from_str(&unique_id(path)));
+            // and the same origin, so what its pages keep (IndexedDB, local storage) is there again too; WebKit makes
+            // up a new one each launch otherwise
+            if let Some(base) = NSURL::URLWithString(&NSString::from_str(&format!("webkit-extension://{}/", unique_id(path)))) {
+                context.setBaseURL(&base);
+            }
             // Safari's Develop menu reaches its background page and popups
             context.setInspectable(true);
             let granted = WKWebExtensionContextPermissionStatus::GrantedExplicitly;
