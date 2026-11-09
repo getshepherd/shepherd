@@ -1252,6 +1252,12 @@ const NEW_TAB_SCRIPT: &str = r#"(() => {
   };
   addEventListener('click', open);
   addEventListener('auxclick', open);
+  // WebKit goes back on a Backspace outside a text field, which Safari switches off and wry can't: a stray one left
+  // the page (or its blank tab's Recently used, as if it closed)
+  addEventListener('keydown', e => {
+    const t = e.composedPath()[0];
+    if (e.key === 'Backspace' && !(t?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t?.tagName))) e.preventDefault();
+  });
 })();"#;
 
 /// A page that sends the links asked for in a new tab to `tab`.
