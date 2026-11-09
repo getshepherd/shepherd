@@ -97,6 +97,8 @@ pub(super) struct Page {
     tunnel: Option<crate::herdr::Tunnel>,
     /// A browser tab's annotations.
     pub(super) annotations: annotations::Draft,
+    /// A browser tab as the browser extensions know it, told it closed when the page goes.
+    _extension_tab: Option<crate::browser_extensions::TabMark>,
 }
 
 /// A machine's page whose forward isn't up: being made, or why it couldn't be; with the entry's URL it is for.
@@ -468,6 +470,7 @@ impl Shell {
         // an extension's page wears Shepherd's theme from its first paint
         let dressed = crate::extensions::by_page(cx, &key.0).map(|ext| crate::extensions::theme_script(Theme::of(cx), &ext.origin()));
         let browser = browser::is_tab(&key.0);
+        let tab_id = browser.then(|| key.0.clone());
         let device = self.device_page_session(&key.0);
         self.pages.made += 1;
         let serial = self.pages.made;
@@ -571,7 +574,9 @@ impl Shell {
         {
             self.pages.layered = host.is_some();
         }
+        let _extension_tab = tab_id.map(|id| crate::browser_extensions::opened_tab(&id, &view));
         Ok(Page {
+            _extension_tab,
             view: Rc::new(view),
             serial,
             entry_url: entry_url.to_string(),
@@ -736,6 +741,11 @@ impl Shell {
             }
         }
         self.pages.links_outside.set(SettingsGlobal::of(cx).settings.web_links_outside);
+        // the browser tab the panel shows, or last showed, is the active one extensions act on (chrome.tabs, their
+        // buttons), as a Chrome window always has one
+        if let Some(crate::right_panel::Surface::Browser(id)) = self.panel().and_then(|p| p.active.as_ref()) {
+            crate::browser_extensions::activate_tab(id);
+        }
         #[cfg(target_os = "macos")]
         if let Some(active) = cx.try_global::<crate::bindings::ActiveBindings>() {
             let chords: Vec<String> = active.0.iter().map(|(_, chord)| chord.clone()).collect();

@@ -172,19 +172,38 @@ pub fn error(path: &Path) -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
-pub use webkit::{actions, configuration, perform_action};
+pub use webkit::{actions, activate_tab, configuration, opened_tab, perform_action};
+
+/// A browser tab as extensions know it, from [`opened_tab`] on; dropped with its page, it tells them it closed.
+pub struct TabMark(#[cfg_attr(not(target_os = "macos"), allow(dead_code))] String);
+
+#[cfg(not(target_os = "macos"))]
+pub fn opened_tab(id: &str, _: &wry::WebView) -> TabMark {
+    TabMark(id.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn activate_tab(_: &str) {}
+
+#[cfg(target_os = "macos")]
+impl Drop for TabMark {
+    fn drop(&mut self) {
+        webkit::closed_tab(&self.0);
+    }
+}
 
 /// WebKit's side: one `WKWebExtensionController` for every browser tab, an extension context in it per extension.
 #[cfg(target_os = "macos")]
 mod webkit {
     use crate::settings::BrowserExtension;
     use block2::RcBlock;
-    use objc2::{MainThreadMarker, MainThreadOnly};
-    use objc2::rc::Retained;
-    use objc2_foundation::{NSError, NSOperatingSystemVersion, NSProcessInfo, NSString, NSURL};
+    use objc2::rc::{Retained, Weak};
+    use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
+    use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+    use objc2_foundation::{NSArray, NSError, NSOperatingSystemVersion, NSProcessInfo, NSString, NSURL};
     use objc2_web_kit::{
-        WKWebExtension, WKWebExtensionAction, WKWebExtensionContext, WKWebExtensionContextPermissionStatus, WKWebExtensionController, WKWebExtensionControllerConfiguration, WKWebViewConfiguration,
-        WKWebsiteDataStore,
+        WKWebExtension, WKWebExtensionAction, WKWebExtensionContext, WKWebExtensionContextPermissionStatus, WKWebExtensionController, WKWebExtensionControllerConfiguration,
+        WKWebExtensionControllerDelegate, WKWebExtensionTab, WKWebExtensionTabConfiguration, WKWebExtensionWindow, WKWebView, WKWebViewConfiguration, WKWebsiteDataStore,
     };
     use std::cell::RefCell;
     use std::collections::{HashMap, HashSet};
@@ -205,6 +224,152 @@ mod webkit {
         /// Told when an extension has loaded or failed to: WebKit reads them after the tab is drawn, so the browser
         /// bar's buttons and Settings' "Didn't load" would otherwise wait for some other redraw.
         settled: Option<futures::channel::mpsc::UnboundedSender<()>>,
+        /// The browser tabs, in the order they opened, by their page id.
+        tabs: Vec<(String, Retained<Tab>)>,
+        /// The one the panel shows or last showed, the active tab extensions act on.
+        active: Option<String>,
+        /// Every browser tab is in this one window, as extensions see them; it and the delegate live as long as the
+        /// controller (WebKit holds its delegate weakly).
+        window: Option<Retained<ExtWindow>>,
+        delegate: Option<Retained<Delegate>>,
+        /// URLs extensions asked a new tab for (`tabs.create`), for the Shell to open.
+        new_tabs: Option<futures::channel::mpsc::UnboundedSender<String>>,
+    }
+
+    struct TabIvars {
+        view: Weak<WKWebView>,
+    }
+
+    // What WebKit asks of a tab beyond these (its URL, title, loading) it reads from the web view itself.
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = TabIvars]
+        struct Tab;
+
+        unsafe impl NSObjectProtocol for Tab {}
+
+        unsafe impl WKWebExtensionTab for Tab {
+            #[unsafe(method_id(windowForWebExtensionContext:))]
+            fn window_for(&self, _: &WKWebExtensionContext) -> Option<Retained<ProtocolObject<dyn WKWebExtensionWindow>>> {
+                window()
+            }
+
+            #[unsafe(method_id(webViewForWebExtensionContext:))]
+            fn web_view_for(&self, _: &WKWebExtensionContext) -> Option<Retained<WKWebView>> {
+                self.ivars().view.load()
+            }
+
+            #[unsafe(method(isSelectedForWebExtensionContext:))]
+            fn is_selected(&self, _: &WKWebExtensionContext) -> bool {
+                active_tab().is_some_and(|t| std::ptr::eq(&*t, self))
+            }
+        }
+    );
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        struct ExtWindow;
+
+        unsafe impl NSObjectProtocol for ExtWindow {}
+
+        unsafe impl WKWebExtensionWindow for ExtWindow {
+            #[unsafe(method_id(tabsForWebExtensionContext:))]
+            fn tabs_for(&self, _: &WKWebExtensionContext) -> Retained<NSArray<ProtocolObject<dyn WKWebExtensionTab>>> {
+                let tabs: Vec<_> = STATE.with_borrow(|s| s.tabs.iter().map(|(_, t)| ProtocolObject::from_retained(t.clone())).collect());
+                NSArray::from_retained_slice(&tabs)
+            }
+
+            #[unsafe(method_id(activeTabForWebExtensionContext:))]
+            fn active_tab_for(&self, _: &WKWebExtensionContext) -> Option<Retained<ProtocolObject<dyn WKWebExtensionTab>>> {
+                active_tab().map(ProtocolObject::from_retained)
+            }
+        }
+    );
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        struct Delegate;
+
+        unsafe impl NSObjectProtocol for Delegate {}
+
+        unsafe impl WKWebExtensionControllerDelegate for Delegate {
+            #[unsafe(method_id(webExtensionController:openWindowsForExtensionContext:))]
+            fn open_windows(&self, _: &WKWebExtensionController, _: &WKWebExtensionContext) -> Retained<NSArray<ProtocolObject<dyn WKWebExtensionWindow>>> {
+                NSArray::from_retained_slice(&window().into_iter().collect::<Vec<_>>())
+            }
+
+            #[unsafe(method_id(webExtensionController:focusedWindowForExtensionContext:))]
+            fn focused_window(&self, _: &WKWebExtensionController, _: &WKWebExtensionContext) -> Option<Retained<ProtocolObject<dyn WKWebExtensionWindow>>> {
+                window()
+            }
+
+            // ponytail: the tab opens in the panel a moment later; the extension is answered with none, so what it
+            // does with the new tab right away (tabs.update on it) is lost
+            #[unsafe(method(webExtensionController:openNewTabUsingConfiguration:forExtensionContext:completionHandler:))]
+            fn open_new_tab(
+                &self,
+                _: &WKWebExtensionController,
+                config: &WKWebExtensionTabConfiguration,
+                _: &WKWebExtensionContext,
+                done: &block2::DynBlock<dyn Fn(*mut ProtocolObject<dyn WKWebExtensionTab>, *mut NSError)>,
+            ) {
+                let url = unsafe { config.url() }.and_then(|u| u.absoluteString()).map(|s| s.to_string());
+                if let Some(url) = url {
+                    STATE.with_borrow(|s| s.new_tabs.as_ref().map(|tx| tx.unbounded_send(url)));
+                }
+                done.call((std::ptr::null_mut(), std::ptr::null_mut()));
+            }
+        }
+    );
+
+    fn window() -> Option<Retained<ProtocolObject<dyn WKWebExtensionWindow>>> {
+        STATE.with_borrow(|s| s.window.clone()).map(ProtocolObject::from_retained)
+    }
+
+    fn active_tab() -> Option<Retained<Tab>> {
+        STATE.with_borrow(|s| s.active.as_ref().and_then(|id| s.tabs.iter().find(|(i, _)| i == id)).map(|(_, t)| t.clone()))
+    }
+
+    /// Tells the extensions about browser tab `id`, its page in `view`. WebKit asks the tab back while it is told, so
+    /// the state is never borrowed across a call to the controller.
+    pub fn opened_tab(id: &str, view: &wry::WebView) -> super::TabMark {
+        use wry::WebViewExtMacOS;
+        let mark = super::TabMark(id.to_string());
+        let Some(mtm) = MainThreadMarker::new() else { return mark };
+        let Some(controller) = STATE.with_borrow(|s| s.controller.clone()) else { return mark };
+        let web_view = view.webview();
+        let this = Tab::alloc(mtm).set_ivars(TabIvars { view: Weak::new(&**web_view) });
+        let tab: Retained<Tab> = unsafe { msg_send![super(this), init] };
+        STATE.with_borrow_mut(|s| s.tabs.push((id.to_string(), tab.clone())));
+        unsafe { controller.didOpenTab(ProtocolObject::from_ref(&*tab)) };
+        mark
+    }
+
+    pub(super) fn closed_tab(id: &str) {
+        let (controller, tab) = STATE.with_borrow_mut(|s| {
+            let at = s.tabs.iter().position(|(i, _)| i == id);
+            if s.active.as_deref() == Some(id) {
+                s.active = None;
+            }
+            (s.controller.clone(), at.map(|at| s.tabs.remove(at).1))
+        });
+        if let (Some(controller), Some(tab)) = (controller, tab) {
+            unsafe { controller.didCloseTab_windowIsClosing(ProtocolObject::from_ref(&*tab), false) };
+        }
+    }
+
+    /// Browser tab `id` is the active one now.
+    pub fn activate_tab(id: &str) {
+        if STATE.with_borrow(|s| s.active.as_deref() == Some(id)) {
+            return;
+        }
+        let previous = active_tab();
+        STATE.with_borrow_mut(|s| s.active = Some(id.to_string()));
+        let (Some(controller), Some(now)) = (STATE.with_borrow(|s| s.controller.clone()), active_tab()) else { return };
+        unsafe { controller.didActivateTab_previousActiveTab(ProtocolObject::from_ref(&*now), previous.as_deref().map(ProtocolObject::from_ref)) };
     }
 
     thread_local! {
@@ -237,14 +402,26 @@ mod webkit {
             let settled = first.then(|| {
                 let (tx, rx) = futures::channel::mpsc::unbounded();
                 state.settled = Some(tx);
-                rx
+                let (tabs_tx, tabs_rx) = futures::channel::mpsc::unbounded();
+                state.new_tabs = Some(tabs_tx);
+                let delegate: Retained<Delegate> = unsafe { msg_send![Delegate::alloc(mtm), init] };
+                unsafe { controller.setDelegate(Some(ProtocolObject::from_ref(&*delegate))) };
+                state.delegate = Some(delegate);
+                state.window = Some(unsafe { msg_send![ExtWindow::alloc(mtm), init] });
+                (rx, tabs_rx)
             });
             (controller, settled)
         });
-        if let Some(mut settled) = settled {
+        if let Some((mut settled, mut new_tabs)) = settled {
             cx.spawn(async move |cx| {
                 while settled.next().await.is_some() {
                     cx.update(|cx| cx.refresh_windows());
+                }
+            })
+            .detach();
+            cx.spawn(async move |cx| {
+                while let Some(url) = new_tabs.next().await {
+                    cx.update(|cx| crate::shell::open_inside(&url, cx));
                 }
             })
             .detach();
@@ -338,6 +515,14 @@ mod webkit {
                 context.setPermissionStatus_forMatchPattern(granted, &pattern);
             }
             controller.loadExtensionContext_error(&context).map_err(|e| e.localizedDescription().to_string())?;
+            // the tabs opened before it loaded: WebKit asks the window for them, yet counts none open until told
+            let tabs: Vec<_> = STATE.with_borrow(|s| s.tabs.iter().map(|(_, t)| t.clone()).collect());
+            for tab in &tabs {
+                context.didOpenTab(ProtocolObject::from_ref(&**tab));
+            }
+            if let Some(tab) = active_tab() {
+                context.didActivateTab_previousActiveTab(ProtocolObject::from_ref(&*tab), None);
+            }
             Ok(Some(context))
         }
     }
@@ -387,21 +572,43 @@ mod webkit {
 
     /// Clicks extension `path`'s toolbar button at `(x, y)` in `window` (points from its top left): WebKit runs its
     /// action, and its popup, when it has one, opens under that point.
+    /// What Chrome tells an action's popup asking for its tab: `tabs.getCurrent()` gives it none. WebKit gives it the
+    /// tab it acts on, and a popup that checks (Proton Pass) takes itself for a page open in a tab, sizes itself to
+    /// 100% of the popover, which sizes itself to the popup: an empty bubble. WebKit makes the popup's web view anew
+    /// for each opening and has begun loading it, so it loads again with the script in.
+    fn popup_not_a_tab(action: &WKWebExtensionAction) {
+        use objc2_web_kit::{WKUserScript, WKUserScriptInjectionTime};
+        const SCRIPT: &str = "for (const api of [globalThis.browser, globalThis.chrome]) try { if (api && api.tabs) Object.defineProperty(api.tabs, 'getCurrent', { value: (done) => typeof done === 'function' ? void done(undefined) : Promise.resolve(undefined) }) } catch {}";
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let Some(web_view) = (unsafe { action.popupWebView() }) else { return };
+        unsafe {
+            let script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(WKUserScript::alloc(mtm), &NSString::from_str(SCRIPT), WKUserScriptInjectionTime::AtDocumentStart, true);
+            web_view.configuration().userContentController().addUserScript(&script);
+            web_view.reload();
+        }
+    }
+
+
     pub fn perform_action(path: &Path, window: &impl wry::raw_window_handle::HasWindowHandle, x: f64, y: f64) {
         use objc2_foundation::{NSPoint, NSRect, NSRectEdge, NSSize};
         let Some(context) = STATE.with_borrow(|state| state.loaded.get(path).cloned()) else { return };
         let Ok(handle) = window.window_handle() else { return };
         let wry::raw_window_handle::RawWindowHandle::AppKit(handle) = handle.as_raw() else { return };
         let view: &objc2_app_kit::NSView = unsafe { handle.ns_view.cast().as_ref() };
+        let tab = active_tab();
+        let tab = tab.as_deref().map(ProtocolObject::from_ref);
         unsafe {
-            let Some(action) = context.actionForTab(None) else { return };
+            let Some(action) = context.actionForTab(tab) else { return };
             match action.popupPopover().filter(|_| action.presentsPopup()) {
                 Some(popover) => {
+                    if !popover.isShown() {
+                        popup_not_a_tab(&action);
+                    }
                     let y = if view.isFlipped() { y } else { view.frame().size.height - y };
                     let at = NSRect::new(NSPoint::new(x - 1., y - 1.), NSSize::new(2., 2.));
                     popover.showRelativeToRect_ofView_preferredEdge(at, view, if view.isFlipped() { NSRectEdge::MaxY } else { NSRectEdge::MinY });
                 }
-                None => context.performActionForTab(None),
+                None => context.performActionForTab(tab),
             }
         }
     }
