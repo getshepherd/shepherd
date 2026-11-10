@@ -96,13 +96,17 @@ impl Shell {
             return;
         }
         self.closed_worktrees_for = Some(key);
-        // one ask a repo, from the top workspace of its first group
+        // One ask a repo, from the top workspace of its first group. herdr names a workspace's repo only once a
+        // worktree was made or opened from it, so one opened on a repo's folder is asked too: the backend finds the
+        // repo from where its panes are, and `closed_in` keeps a repo two such groups share to the first of them.
         let mut repos: Vec<(String, String, String)> = Vec::new();
         for (w, _) in crate::model::groups(snapshot.workspace_tree()) {
-            if let Some(t) = &w.worktree
-                && !repos.iter().any(|(k, _, _)| *k == t.repo_key)
-            {
-                repos.push((t.repo_key.clone(), w.workspace_id.clone(), t.checkout_path.clone()));
+            let (key, checkout) = match &w.worktree {
+                Some(t) => (t.repo_key.clone(), t.checkout_path.clone()),
+                None => (w.workspace_id.clone(), super::sidebar::workspace_dir(w, Some(snapshot)).unwrap_or_default()),
+            };
+            if !repos.iter().any(|(k, _, _)| *k == key) {
+                repos.push((key, w.workspace_id.clone(), checkout));
             }
         }
         self.closed_worktrees.retain(|id, _| repos.iter().any(|(_, w, _)| w == id));
@@ -111,8 +115,9 @@ impl Shell {
             // a folder outside git answers with an error: it just has none to show
             let list = async move {
                 match crate::mock::dir() {
-                    // the fixture has no herdr to ask; git runs for real in its repos
-                    Some(_) => crate::worktree::list(&checkout, |_| None),
+                    // the fixture has no herdr to ask; git runs for real in its repos, and the asking workspace has
+                    // its own checkout open, as herdr would say
+                    Some(_) => crate::worktree::list(&checkout, |path| (path == checkout).then(|| at.clone())),
                     None => backend.worktrees.list(at).await,
                 }
             };
@@ -125,15 +130,9 @@ impl Shell {
         }
     }
 
-    /// The worktrees of group `w`'s repo that no workspace has open, bare ones left out; none unless All worktrees is on.
+    /// The worktrees of group `w`'s repo that no workspace has open; none unless All worktrees is on.
     pub(super) fn closed_in(&self, w: &crate::model::Workspace) -> Vec<crate::model::WorktreeEntry> {
-        let (Some(list), Some(s)) = (self.closed_worktrees.get(&w.workspace_id), self.snapshot.as_ref()) else { return Vec::new() };
-        let open = |e: &crate::model::WorktreeEntry| {
-            s.workspaces.iter().any(|o| {
-                e.open_workspace_id.as_deref() == Some(o.workspace_id.as_str()) || o.worktree.as_ref().is_some_and(|t| t.checkout_path == e.path)
-            })
-        };
-        list.iter().filter(|e| !e.is_bare && !open(e)).cloned().collect()
+        self.snapshot.as_ref().map_or_else(Vec::new, |s| s.closed_worktrees(&self.closed_worktrees, w))
     }
 
     pub(super) fn new_worktree(&mut self, workspace_id: String, branch: String, cx: &mut Context<Self>) {

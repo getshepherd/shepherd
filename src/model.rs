@@ -351,6 +351,24 @@ impl Snapshot {
         tree
     }
 
+    /// The worktrees of group `w`'s repo, out of `lists` (each group's worktree list, by its top workspace's id), that
+    /// no workspace has open, bare ones left out. Two groups whose workspaces herdr knows no repo of may be on one
+    /// repo (git lists its main checkout first in both): the one first in the sidebar lists them.
+    pub fn closed_worktrees(&self, lists: &HashMap<String, Vec<WorktreeEntry>>, w: &Workspace) -> Vec<WorktreeEntry> {
+        let Some(list) = lists.get(&w.workspace_id) else { return Vec::new() };
+        let main = |l: &[WorktreeEntry]| l.first().map(|e| e.path.clone());
+        let number = |id: &str| self.workspaces.iter().find(|o| o.workspace_id == id).map(|o| o.number);
+        if lists.iter().any(|(id, other)| main(other) == main(list) && number(id).is_some_and(|n| n < w.number)) {
+            return Vec::new();
+        }
+        let open = |e: &WorktreeEntry| {
+            self.workspaces.iter().any(|o| {
+                e.open_workspace_id.as_deref() == Some(o.workspace_id.as_str()) || o.worktree.as_ref().is_some_and(|t| t.checkout_path == e.path)
+            })
+        };
+        list.iter().filter(|e| !e.is_bare && !open(e)).cloned().collect()
+    }
+
     /// Panes running a detected agent, the ones that need you first, the latest change first (herdr's "priority" sort).
     pub fn agents(&self) -> Vec<&Pane> {
         let rank = |s: AgentStatus| match s {

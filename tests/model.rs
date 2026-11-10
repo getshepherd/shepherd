@@ -478,6 +478,29 @@ fn worktrees_group_under_their_repo() {
 }
 
 #[test]
+fn a_repos_closed_worktrees_show_once_also_under_a_workspace_herdr_knows_no_repo_of() {
+    let mut s = fixture();
+    // opened on the repo's folder, not through a worktree: herdr gives them no repo
+    s.workspaces = vec![ws("notes", 1, None), ws("notes-again", 2, None), ws("soon", 3, None)];
+    let entry = |path: &str, open: Option<&str>| -> shepherd::model::WorktreeEntry {
+        serde_json::from_value(serde_json::json!({"path": path, "branch": path, "open_workspace_id": open})).unwrap()
+    };
+    let notes = vec![entry("/notes", Some("notes")), entry("/notes-editor", None)];
+    let lists = std::collections::HashMap::from([
+        ("notes".to_string(), notes.clone()),
+        ("notes-again".to_string(), notes),
+        ("soon".to_string(), vec![entry("/soon", Some("soon"))]),
+    ]);
+    let closed = |id: &str| {
+        let w = s.workspaces.iter().find(|w| w.workspace_id == id).unwrap();
+        s.closed_worktrees(&lists, w).into_iter().map(|e| e.path).collect::<Vec<_>>()
+    };
+    assert_eq!(closed("notes"), ["/notes-editor"]);
+    assert!(closed("notes-again").is_empty(), "the repo's first group lists them");
+    assert!(closed("soon").is_empty(), "its one checkout is open");
+}
+
+#[test]
 fn a_dropped_workspace_group_takes_the_place_of_the_one_it_is_dropped_on() {
     let groups: Vec<Vec<String>> = [vec!["a"], vec!["b", "b1"], vec!["c"]]
         .map(|g| g.into_iter().map(String::from).collect())
