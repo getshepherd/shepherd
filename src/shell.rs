@@ -53,7 +53,10 @@ mod workspaces;
 
 pub(crate) use window::window_background;
 use window::*;
-pub(crate) use browser::{open_inside, open_link};
+pub(crate) use browser::open_link;
+// Only the WebKit extensions host (macOS) opens a tab from outside the shell; elsewhere the import would be unused.
+#[cfg(target_os = "macos")]
+pub(crate) use browser::open_inside;
 use motion::*;
 use sync::sync_loop;
 pub(crate) use widgets::{icon_button, menu_card, modal, row, status_dot, status_icon, tip};
