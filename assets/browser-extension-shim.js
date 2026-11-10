@@ -1,20 +1,24 @@
-// Shepherd's shim for Chrome extensions. Shepherd loads it before the background service worker of an extension it
-// unpacked from the Chrome Web Store (browser_extensions::prepare), and it adds the Chrome APIs WebKit doesn't have.
-// A background written for Chrome calls some of them on its first lines, and one `undefined.addListener` there stops
-// the whole script before it listens for its content scripts' messages, which then get no answer.
+// Shepherd's shim for Chrome extensions. Shepherd loads it before the background service worker and the content
+// scripts of an extension it unpacked from the Chrome Web Store (browser_extensions::prepare). It pins the extension's
+// `chrome` and `browser`, and in the background adds the Chrome APIs WebKit doesn't have. A background written for
+// Chrome calls some of them on its first lines, and one `undefined.addListener` there stops the whole script before
+// it listens for its content scripts' messages, which then get no answer.
 //
 // Each member is added only where WebKit has nothing of that name, so one WebKit grows later is its own. A namespace
 // WebKit lacks altogether is added only when the manifest asks for its permission, as Chrome gives it. What WebKit
 // has was checked against its Source/WebKit/WebProcess/Extensions/Interfaces/WebExtensionAPI*.idl (2026-11).
 (() => {
   // Proton Pass swaps the global chrome and browser for Proxies of its own that answer nothing, to keep the API from
-  // other scripts; in Chrome that is harmless, but WebKit then delivers no event, no message, to the extension's
-  // listeners. Pinned, the swap fails (a TypeError in its timer) and WebKit's stay.
+  // other scripts, in its background and its content scripts alike; in Chrome that is harmless, but WebKit then
+  // delivers no event, no message, to that world's listeners (a content script no longer hears its autofill).
+  // Pinned, the swap fails (a TypeError in its timer) and WebKit's stay.
   for (const name of ['chrome', 'browser']) {
     try {
       if (globalThis[name]) Object.defineProperty(globalThis, name, { value: globalThis[name], writable: false, configurable: false });
     } catch {}
   }
+  // the stand-ins are for the background; a content script has none of these APIs in Chrome either
+  if (typeof ServiceWorkerGlobalScope === 'undefined' || !(globalThis instanceof ServiceWorkerGlobalScope)) return;
   // an event that never fires
   const event = () => ({ addListener() {}, removeListener() {}, hasListener: () => false, hasListeners: () => false });
   // a call that does nothing and answers `value` (or what `value` returns for its arguments), by promise and by

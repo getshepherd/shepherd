@@ -121,33 +121,46 @@ pub fn remove_files(path: &Path) {
     }
 }
 
-/// The Chrome APIs WebKit lacks, as do-nothing stand-ins a Chrome extension's background finds before its own code.
+/// What a Chrome extension's scripts find before their own code: its `chrome` and `browser` pinned, and, in its
+/// background, the Chrome APIs WebKit lacks as do-nothing stand-ins.
 const SHIM: &str = include_str!("../assets/browser-extension-shim.js");
 const SHIM_FILE: &str = "shepherd_shim.js";
 const WRAPPER_FILE: &str = "shepherd_background.js";
 
-/// Puts [`SHIM`] before the background service worker of the extension in `folder`: writes the shim at its root and,
-/// beside the worker's script (so the script's own relative imports resolve as before), a wrapper that loads the
-/// shim and then that script; `manifest.json` then names the wrapper. The wrapper keeps the script's path, so on a
-/// folder done before only the shim is written again (a newer Shepherd's).
-// ponytail: only a service worker is wrapped, the one background Chrome takes since MV3; an MV2 page or scripts run as is
+/// Puts [`SHIM`] before the extension's own scripts in `folder`: writes the shim at its root, puts it first in each
+/// content script (but those of the page's own world, which have no `chrome`) and, beside the background service
+/// worker's script (so the script's own relative imports resolve as before), writes a wrapper that loads the shim and
+/// then that script; `manifest.json` then names the wrapper. All of it holds on a folder done before, where only the
+/// shim is written again (a newer Shepherd's).
+// ponytail: only a service worker is wrapped, the one background Chrome takes since MV3; an MV2 page or scripts run as
+// is. A content script's world gets the shim with the manifest's scripts, not with scripting.executeScript alone.
 pub fn prepare(folder: &Path) -> std::io::Result<()> {
     std::fs::write(folder.join(SHIM_FILE), SHIM)?;
     let path = folder.join("manifest.json");
     let mut manifest: serde_json::Value = serde_json::from_str(std::fs::read_to_string(&path)?.trim_start_matches('\u{feff}'))?;
-    let Some(script) = manifest["background"]["service_worker"].as_str().map(|s| s.trim_start_matches('/').to_string()) else { return Ok(()) };
-    let (at, file) = script.rsplit_once('/').map_or((None, script.as_str()), |(at, file)| (Some(at), file));
-    if file == WRAPPER_FILE {
+    let before = manifest.clone();
+    for script in manifest.get_mut("content_scripts").and_then(|s| s.as_array_mut()).into_iter().flatten() {
+        let isolated = script["world"].as_str().is_none_or(|w| w.eq_ignore_ascii_case("isolated"));
+        if let Some(js) = script.get_mut("js").and_then(|js| js.as_array_mut()).filter(|js| isolated && !js.is_empty() && js[0] != SHIM_FILE) {
+            js.insert(0, SHIM_FILE.into());
+        }
+    }
+    if let Some(script) = manifest["background"]["service_worker"].as_str().map(|s| s.trim_start_matches('/').to_string()) {
+        let (at, file) = script.rsplit_once('/').map_or((None, script.as_str()), |(at, file)| (Some(at), file));
+        if file != WRAPPER_FILE {
+            // the file's name as a JS string, quoted and escaped
+            let name = serde_json::to_string(&format!("./{file}"))?;
+            let wrapper = match manifest["background"]["type"].as_str() {
+                Some("module") => format!("import '/{SHIM_FILE}';\nimport {name};\n"),
+                _ => format!("importScripts('/{SHIM_FILE}', {name});\n"),
+            };
+            std::fs::write(folder.join(at.unwrap_or_default()).join(WRAPPER_FILE), wrapper)?;
+            manifest["background"]["service_worker"] = at.map_or(WRAPPER_FILE.into(), |at| format!("{at}/{WRAPPER_FILE}")).into();
+        }
+    }
+    if manifest == before {
         return Ok(());
     }
-    // the file's name as a JS string, quoted and escaped
-    let name = serde_json::to_string(&format!("./{file}"))?;
-    let wrapper = match manifest["background"]["type"].as_str() {
-        Some("module") => format!("import '/{SHIM_FILE}';\nimport {name};\n"),
-        _ => format!("importScripts('/{SHIM_FILE}', {name});\n"),
-    };
-    std::fs::write(folder.join(at.unwrap_or_default()).join(WRAPPER_FILE), wrapper)?;
-    manifest["background"]["service_worker"] = at.map_or(WRAPPER_FILE.into(), |at| format!("{at}/{WRAPPER_FILE}")).into();
     std::fs::write(&path, serde_json::to_string_pretty(&manifest)?)
 }
 
@@ -739,10 +752,17 @@ mod tests {
             assert_eq!(std::fs::read_to_string(classic.join("shepherd_background.js")).unwrap(), "importScripts('/shepherd_shim.js', \"./background.js\");\n");
             assert_eq!(std::fs::read_to_string(classic.join("shepherd_shim.js")).unwrap(), SHIM);
         }
-        // no background, nothing but the shim
+        // no background, nothing but the shim; content scripts get it first, but those of the page's world
         std::fs::write(classic.join("manifest.json"), r#"{"name":"c"}"#).unwrap();
         prepare(&classic).unwrap();
         assert_eq!(manifest(&classic), serde_json::json!({"name": "c"}));
+        let scripts = serde_json::json!([{"js": ["a.js"]}, {"js": ["b.js"], "world": "MAIN"}, {"css": ["c.css"]}]);
+        std::fs::write(classic.join("manifest.json"), serde_json::json!({"content_scripts": scripts}).to_string()).unwrap();
+        for _ in 0..2 {
+            prepare(&classic).unwrap();
+            let shimmed = serde_json::json!([{"js": ["shepherd_shim.js", "a.js"]}, {"js": ["b.js"], "world": "MAIN"}, {"css": ["c.css"]}]);
+            assert_eq!(manifest(&classic)["content_scripts"], shimmed);
+        }
     }
 
     /// Live: downloads Dark Reader from the Chrome Web Store into `dir()`. Give it settings of its own, as
