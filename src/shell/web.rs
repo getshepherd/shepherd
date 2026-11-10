@@ -503,6 +503,11 @@ impl Shell {
             Some(config) => wry::WebViewBuilderExtMacos::with_webview_configuration(builder, config),
             None => builder,
         };
+        #[cfg(target_os = "macos")]
+        let builder = match browser {
+            true => builder.with_user_agent(safari_agent()),
+            false => builder,
+        };
         // a page zooms with a pinch; a device's 3D view keeps its gestures for the model
         #[cfg(target_os = "macos")]
         let pinch_zooms = device.is_none();
@@ -1312,6 +1317,24 @@ pub(super) fn nav_frame(theme: &Theme, id: impl Into<gpui::ElementId>, enabled: 
         .when(cfg!(windows), |el| el.occlude()) // off the drag strip, as the tabs
         .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
         .when(enabled, |el| el.cursor_pointer().hover(move |s| s.bg(hover)))
+}
+
+/// What a browser tab calls itself: Safari's user agent, Safari's version on this Mac in it. WebKit's own names no
+/// browser, and a site takes it for one it doesn't know: Proton's sign-in then talks to Proton Pass the Firefox way,
+/// by window messages a Chrome extension doesn't answer, where as Safari it messages the extension directly
+/// (`externally_connectable`), which WebKit delivers.
+#[cfg(target_os = "macos")]
+fn safari_agent() -> &'static str {
+    static AGENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        use objc2_foundation::{NSBundle, NSString, ns_string};
+        let version = NSBundle::bundleWithPath(ns_string!("/Applications/Safari.app"))
+            .and_then(|safari| safari.objectForInfoDictionaryKey(ns_string!("CFBundleShortVersionString")))
+            .and_then(|v| v.downcast::<NSString>().ok())
+            .map_or_else(|| "26.0".to_string(), |v| v.to_string());
+        // the rest is frozen in WebKit as in Safari, whatever the Mac
+        format!("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{version} Safari/605.1.15")
+    })
 }
 
 /// macOS: a page's own view, holding its WKWebView and, docked, WebKit's inspector (which docks into the web view's
