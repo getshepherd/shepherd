@@ -461,7 +461,28 @@ mod webkit {
             let config = WKWebViewConfiguration::new(mtm);
             config.setWebsiteDataStore(&WKWebsiteDataStore::defaultDataStore(mtm));
             config.setWebExtensionController(Some(&controller));
+            idle_callbacks(&config);
             Some(config)
+        }
+    }
+
+    /// Turns on `requestIdleCallback` in `config`'s pages, which WebKit builds but keeps behind a flag. Chrome has it,
+    /// and an extension's content scripts call it bare: Proton Pass finds a page's login fields in one, and without it
+    /// puts no autofill icon in them.
+    /// ponytail: private WebKit (`_features`, `_setEnabled:forFeature:`); the flag goes once Safari ships it
+    unsafe fn idle_callbacks(config: &WKWebViewConfiguration) {
+        use objc2::runtime::{AnyClass, AnyObject};
+        let prefs: Retained<AnyObject> = msg_send![config, preferences];
+        let Some(class) = AnyClass::get(c"WKPreferences") else { return };
+        if !class.metaclass().responds_to(objc2::sel!(_features)) || !class.responds_to(objc2::sel!(_setEnabled:forFeature:)) {
+            return;
+        }
+        let features: Retained<NSArray<AnyObject>> = msg_send![class, _features];
+        for feature in features.iter() {
+            let key: Retained<NSString> = msg_send![&*feature, key];
+            if key.to_string() == "RequestIdleCallbackEnabled" {
+                let _: () = msg_send![&*prefs, _setEnabled: true, forFeature: &*feature];
+            }
         }
     }
 
