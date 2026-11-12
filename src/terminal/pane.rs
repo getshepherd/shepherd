@@ -1205,47 +1205,84 @@ impl EntityInputHandler for PaneTerminal {
 impl Render for PaneTerminal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
+        // The pane is a cached view, and a focus the shell moves while it draws (herdr's focus, a shortcut) refreshes
+        // nothing: herdr's next frame redrew it, a raw stream (Rex) may send none for a while.
+        if self._focus_watch.is_empty() {
+            self._focus_watch = vec![cx.on_focus(&self.focus, window, |_, _, cx| cx.notify()), cx.on_blur(&self.focus, window, |_, _, cx| cx.notify())];
+        }
         if let Some(why) = self.ended.clone() {
             let takeover = needs_takeover(&why);
+            let label = if takeover { "Take over" } else { "Reattach" };
+            // Enter reaches only the focused pane, so only its button shows the key
+            let enter = self.focus.is_focused(window);
             return div()
-                // keeps the pane focused, so the app's shortcuts still reach their handlers
+                // keeps the pane focused, so the app's shortcuts still reach their handlers, and Enter the button's
                 .track_focus(&self.focus)
                 .on_mouse_down(MouseButton::Left, cx.listener(|pane, _, window, cx| window.focus(&pane.focus, cx)))
+                .on_key_down(cx.listener(move |pane, event: &KeyDownEvent, _, cx| {
+                    if event.keystroke.key == "enter" && !event.keystroke.modifiers.modified() {
+                        pane.reattach(takeover, cx);
+                    }
+                }))
                 .size_full()
                 .flex()
                 .flex_col()
                 .items_center()
                 .justify_center()
-                .gap_3()
                 .bg(theme.terminal.background)
-                .text_color(theme.text_muted)
-                .text_sm()
-                .child(why)
+                .child(
+                    div()
+                        .size(px(44.))
+                        .mb_4()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(12.))
+                        .bg(theme.wash(0.05))
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(crate::ui::icon("icons/terminal.svg", 22., theme.text_muted)),
+                )
+                .child(div().text_color(theme.text).font_weight(gpui::FontWeight::MEDIUM).child(if takeover {
+                    "Open in another client"
+                } else {
+                    "Terminal detached"
+                }))
+                // a refused attach's reason is herdr's own hint for its CLI (`retry with --takeover`): the button is that
+                .child(div().mt_1().max_w(px(420.)).text_center().text_sm().text_color(theme.text_muted).child(if takeover {
+                    "Take it over to type here; the other client loses it.".into()
+                } else {
+                    why
+                }))
                 // a server on another protocol is why: say so, and how to fix it
                 .children(cx.try_global::<crate::herdr::OutdatedServer>().and_then(|o| o.0.clone()).map(|outdated| {
-                    div().max_w(px(420.)).text_center().text_color(theme.danger).child(outdated)
+                    div().mt_2().max_w(px(420.)).text_center().text_sm().text_color(theme.danger).child(outdated)
                 }))
                 .child(
                     div()
                         .id("reattach")
-                        .px_3()
+                        .mt_5()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .pl_3()
+                        .pr(px(if enter { 6. } else { 12. }))
                         .py_1()
                         .rounded_md()
-                        .bg(theme.hover)
-                        .text_color(theme.text)
+                        .bg(theme.accent)
+                        .hover(|s| s.opacity(0.9))
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.on_accent)
                         .cursor_pointer()
-                        .child(if takeover { "Take over" } else { "Reattach" })
+                        .child(label)
+                        .when(enter, |el| el.child(div().px(px(5.)).rounded(px(4.)).bg(theme.on_accent.opacity(0.18)).text_xs().child("↵")))
                         .on_click(cx.listener(move |pane, _, _, cx| pane.reattach(takeover, cx))),
                 )
                 .into_any_element();
         }
         crate::ui::reap_popup(&mut self.preview, window);
         crate::ui::reap_popup(&mut self.reader, window);
-        // The pane is a cached view, and a focus the shell moves while it draws (herdr's focus, a shortcut) refreshes
-        // nothing: herdr's next frame redrew it, a raw stream (Rex) may send none for a while.
-        if self._focus_watch.is_empty() {
-            self._focus_watch = vec![cx.on_focus(&self.focus, window, |_, _, cx| cx.notify()), cx.on_blur(&self.focus, window, |_, _, cx| cx.notify())];
-        }
         let focused = self.focus.is_focused(window);
         let search_bar = self.search.as_ref().map(|search| self.search_bar(search, &theme, cx));
         let loader = (self.session.is_none() && crate::ui::loader::due(self.attaching, window)).then(|| {
