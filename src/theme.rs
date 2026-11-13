@@ -105,12 +105,13 @@ fn color(c: Color) -> Hsla {
 }
 
 /// Every theme variant: the `zeron-theme` built-ins but Zeron's own family, then Ghostty's
-/// (assets/themes/ghostty.conf) under names the built-ins do not have.
+/// (assets/themes/ghostty.conf) and Shepherd's own (assets/themes/shepherd.conf) under names the built-ins do not have.
 pub fn variants() -> &'static [ThemeVariant] {
     static VARIANTS: std::sync::OnceLock<Vec<ThemeVariant>> = std::sync::OnceLock::new();
     VARIANTS.get_or_init(|| {
         let mut all: Vec<ThemeVariant> = ThemeRegistry::builtin().families.iter().filter(|f| f.id != "zeron").flat_map(|f| f.variants.iter().cloned()).collect();
-        for v in ghostty(include_str!("../assets/themes/ghostty.conf")) {
+        let files = concat!(include_str!("../assets/themes/ghostty.conf"), "\n", include_str!("../assets/themes/shepherd.conf"));
+        for v in ghostty(files) {
             if !all.iter().any(|b| b.name.eq_ignore_ascii_case(&v.name)) {
                 all.push(v);
             }
@@ -352,6 +353,11 @@ mod tests {
         assert_eq!(t.terminal.ansi[1], hex(0xf06b73));
         assert_eq!(t.surface, hex(0x0d1017));
         assert_eq!(t.appearance, Appearance::Dark);
+    }
+
+    #[test]
+    fn shepherd_conf_themes_are_listed() {
+        assert!(variants_for(Appearance::Dark).iter().any(|(_, name)| name == "Darcula Colorful"));
     }
 
     #[test]
