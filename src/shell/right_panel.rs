@@ -113,13 +113,20 @@ fn pull_request_title(shown: &ShownReview) -> String {
     }
 }
 
-fn offer_row(offer: Offer) -> (&'static str, &'static str) {
+/// An extension's tab and row mark, until its favicon is fetched.
+const EXTENSION_ICON: &str = "icons/solar/widget.svg";
+
+fn offer_row(offer: &Offer, cx: &App) -> (&'static str, SharedString) {
     match offer {
-        Offer::Browser => ("icons/solar/global.svg", "Browser"),
-        Offer::Diffs => (DIFF_ICON, "Diffs"),
-        Offer::Files => (FILES_ICON, "Files"),
-        Offer::PullRequest => ("icons/git-pull-request.svg", "Pull request"),
-        Offer::Device => ("icons/solar/smartphone.svg", "Device"),
+        Offer::Browser => ("icons/solar/global.svg", "Browser".into()),
+        Offer::Diffs => (DIFF_ICON, "Diffs".into()),
+        Offer::Files => (FILES_ICON, "Files".into()),
+        Offer::PullRequest => ("icons/git-pull-request.svg", "Pull request".into()),
+        Offer::Device => ("icons/solar/smartphone.svg", "Device".into()),
+        Offer::Extension(name) => {
+            let ext = crate::extensions::by_page(cx, &format!("{}{name}", crate::extensions::PAGE_PREFIX));
+            (EXTENSION_ICON, ext.map_or_else(|| name.clone(), |e| e.title()).into())
+        }
     }
 }
 
@@ -328,7 +335,20 @@ impl Shell {
                     self.new_browser_tab(tab.workspace_id, None, true, window, cx);
                 }
             }
+            Offer::Extension(name) => self.add_extension_surface(&name, window, cx),
         }
+    }
+
+    /// Extension `name`'s page as a tab of the shown workspace's panel, its server started if it doesn't answer; also
+    /// `SHEPHERD_PANEL=extension:<name>` for a screenshot.
+    pub fn add_extension_surface(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.shown_tab() else { return };
+        let id = crate::extensions::panel_page(&tab.workspace_id, name);
+        if let Some(ext) = crate::extensions::by_page(cx, &id).filter(|e| !e.alive) {
+            self.extension_server(ext.clone(), true, cx);
+        }
+        self.update_panel(cx, |p| p.add(Surface::Extension(id)));
+        self.focus_panel(true, window, cx);
     }
 
     /// The strip's tabs, in order.
@@ -347,6 +367,15 @@ impl Shell {
                 Surface::PullRequest => (pull_request_title(shown), if fetching_review { Leading::Spinner } else { mark("icons/git-pull-request.svg") }),
                 Surface::Device(key) => (self.device_label(key), mark("icons/solar/smartphone.svg")),
                 Surface::Files => ("Files".to_string(), mark(FILES_ICON)),
+                Surface::Extension(id) => {
+                    let ext = crate::extensions::by_page(cx, id);
+                    // the sidebar fetched its icon
+                    let icon = ext.and_then(|e| match self.pages.favicons.get(&(e.entry().id, None)) {
+                        Some((_, super::web::Favicon::Image(image))) => Some(image.clone()),
+                        _ => None,
+                    });
+                    (ext.map_or_else(|| "Extension".to_string(), |e| e.title()), icon.map_or_else(|| mark(EXTENSION_ICON), Leading::Image))
+                }
                 Surface::File(id) => match self.right.file_tabs.get(id) {
                     Some(preview) => {
                         let path = preview.read(cx).path.clone();
@@ -367,7 +396,7 @@ impl Shell {
                 self.right.diffs.remove(id);
                 self.update_panel(cx, |p| p.close(surface));
             }
-            Surface::PullRequest | Surface::Files => self.update_panel(cx, |p| p.close(surface)),
+            Surface::PullRequest | Surface::Files | Surface::Extension(_) => self.update_panel(cx, |p| p.close(surface)),
             Surface::File(id) => {
                 // unsaved changes: the first close only says so, the next one lets them go
                 if let Some(preview) = self.right.file_tabs.get(id).cloned()
@@ -389,7 +418,8 @@ impl Shell {
 
     /// The panel and its resize edge.
     pub(super) fn render_right_panel(&mut self, theme: &Theme, shown: &ShownReview, has_remote: bool, window: &mut Window, cx: &mut Context<Self>) -> [AnyElement; 2] {
-        self.right.offers = offered(has_remote, shown.key.is_some(), super::web::embeds_pages(window));
+        let extensions: Vec<String> = cx.try_global::<crate::extensions::Extensions>().map(|e| e.0.iter().map(|e| e.name.clone()).collect()).unwrap_or_default();
+        self.right.offers = offered(has_remote, shown.key.is_some(), super::web::embeds_pages(window), &extensions);
         let width = self.right_panel_drawn(window);
         let now = width * self.right_panel_slide(window);
         let strip = self.render_right_strip(theme, shown, window, cx);
@@ -416,6 +446,16 @@ impl Shell {
                     .into_any_element()
             }
             Some(Surface::Device(key)) => self.render_device(&key, theme, window, cx),
+            // the page's own clicks reach `PageEvent::Clicked`
+            Some(Surface::Extension(id)) => div()
+                .id("right-panel-extension")
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, window, cx| this.focus_panel(true, window, cx)))
+                .child(self.render_web_area(&(id, None), theme, window, cx))
+                .into_any_element(),
             Some(Surface::Files) if self.files_of_shown().is_some() => self.render_files(cx),
             Some(Surface::File(id)) if self.right.file_tabs.contains_key(&id) => self.render_file(&id, cx),
             Some(Surface::Diff(_) | Surface::Files | Surface::File(_)) | None => self.render_surface_picker(theme, cx).into_any_element(),
@@ -488,7 +528,7 @@ impl Shell {
                         cx.stop_propagation();
                         this.update_panel(cx, |p| p.activate(&surface));
                         // a page takes the keyboard from a click on its tab; the pull request has no use for it
-                        let typed_into = matches!(&surface, Surface::Browser(_) | Surface::Files) || matches!(&surface, Surface::Device(k) if k != crate::device::KEY);
+                        let typed_into = matches!(&surface, Surface::Browser(_) | Surface::Files | Surface::Extension(_)) || matches!(&surface, Surface::Device(k) if k != crate::device::KEY);
                         this.focus_panel(typed_into, window, cx);
                     }))
                     .into_any_element(),
@@ -551,7 +591,7 @@ impl Shell {
     fn render_surface_picker(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let (hover_bg, hover_border) = (theme.wash(0.05), theme.border_strong);
         let rows = self.right.offers.clone().into_iter().map(|offer| {
-            let (icon, title) = offer_row(offer);
+            let (icon, title) = offer_row(&offer, cx);
             div()
                 .id(SharedString::from(format!("surface-card-{title}")))
                 .w_full()
@@ -569,7 +609,7 @@ impl Shell {
                 .hover(move |s| s.bg(hover_bg).border_color(hover_border))
                 .child(gpui::svg().path(icon).size(px(15.)).flex_none().text_color(theme.text_muted))
                 .child(div().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM).text_color(theme.text).child(title))
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.pick_surface(offer, window, cx)))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.pick_surface(offer.clone(), window, cx)))
         });
         div()
             .flex_1()
@@ -587,7 +627,7 @@ impl Shell {
         let menu = self.right.plus.as_ref()?;
         let at = menu.value;
         let items = self.right.offers.clone().into_iter().map(|offer| {
-            let (icon, title) = offer_row(offer);
+            let (icon, title) = offer_row(&offer, cx);
             row(theme, false, SharedString::from(format!("right-plus-{title}")))
                 .h(px(28.))
                 .rounded(px(6.))
@@ -599,7 +639,7 @@ impl Shell {
                         if let Some(m) = this.right.plus.as_mut() {
                             m.close()
                         }
-                        this.pick_surface(offer, window, cx);
+                        this.pick_surface(offer.clone(), window, cx);
                     }),
                 )
         });
