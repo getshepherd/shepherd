@@ -131,16 +131,6 @@ pub fn dark(device: &Device) -> Option<bool> {
     }
 }
 
-pub fn set_dark(device: &Device, dark: bool) -> anyhow::Result<()> {
-    match device.platform {
-        #[cfg(target_os = "macos")]
-        Platform::Ios => Ok(simdriver::set_appearance(&device.id, if dark { simdriver::Appearance::Dark } else { simdriver::Appearance::Light })?),
-        Platform::Android => android::set_dark(&device.id, dark),
-        #[allow(unreachable_patterns)]
-        _ => anyhow::bail!("iOS Simulators need macOS"),
-    }
-}
-
 /// A full-resolution PNG of the screen, saved at `to`.
 pub fn screenshot(device: &Device, to: &Path) -> anyhow::Result<()> {
     match device.platform {

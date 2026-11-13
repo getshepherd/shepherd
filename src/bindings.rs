@@ -187,11 +187,6 @@ pub fn recordable(keystroke: &Keystroke) -> bool {
     m.platform || m.control || m.alt || m.function || (keystroke.key.starts_with('f') && keystroke.key[1..].parse::<u8>().is_ok())
 }
 
-/// A chord GPUI can bind: space-separated keystrokes that all parse.
-pub fn valid_chord(chord: &str) -> bool {
-    !chord.trim().is_empty() && chord.split_whitespace().all(|k| Keystroke::parse(k).is_ok())
-}
-
 /// The bindings in force: the user's chords first, then defaults for actions the user did not set, never two
 /// actions on one chord (the user's wins). An empty user chord unbinds its action.
 pub fn effective(user: &BTreeMap<String, String>) -> Vec<(String, String)> {

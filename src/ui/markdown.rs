@@ -35,13 +35,8 @@ pub struct Look {
     pub open_image: Option<Rc<dyn Fn(&std::path::Path, &mut Window, &mut App)>>,
 }
 
-/// `blocks`, keyed under `key` (their paragraphs' selection keys and element ids start with it). A view of them
-/// paints one [`frame_reset`] before the first, however many times it renders some.
-pub fn render(blocks: &[Block], key: &str, theme: &Theme) -> Vec<AnyElement> {
-    render_with(blocks, key, theme, &Look::default())
-}
-
-/// `blocks` drawn the `look` way.
+/// `blocks` drawn the `look` way, keyed under `key` (their paragraphs' selection keys and element ids start with
+/// it). A view of them paints one [`frame_reset`] before the first, however many times it renders some.
 pub fn render_with(blocks: &[Block], key: &str, theme: &Theme, look: &Look) -> Vec<AnyElement> {
     // a paragraph of images without alt text has nothing to show where images are not drawn
     let shown = |b: &Block| look.image.is_some() || !matches!(b, Block::Paragraph { runs } if runs_text(runs).trim().is_empty());
