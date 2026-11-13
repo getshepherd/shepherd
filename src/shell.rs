@@ -427,6 +427,7 @@ impl Shell {
                     if active {
                         s.refresh_places(cx); // sessions made or deleted elsewhere
                         s.push_host_theme(cx);
+                        crate::notify::recheck(cx); // back from System Settings, perhaps
                     }
                     cx.notify(); // the shown tab's agents count as seen once the window is active
                 })

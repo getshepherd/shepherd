@@ -154,6 +154,21 @@ impl gpui::Global for Denied {}
 /// lost and the prompt comes while you are away. Once answered, macOS answers again without a prompt.
 #[cfg(target_os = "macos")]
 pub fn warn_if_denied(cx: &mut App) {
+    check(cx, true);
+}
+
+/// Asks again, without a toast, when the window comes back: they may have been turned on or off in System Settings
+/// meanwhile, and [`Denied`] set at launch would otherwise stay until a restart.
+#[cfg(target_os = "macos")]
+pub fn recheck(cx: &mut App) {
+    check(cx, false);
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn recheck(_: &mut App) {}
+
+#[cfg(target_os = "macos")]
+fn check(cx: &mut App, toast: bool) {
     if NSBundle::mainBundle().bundleIdentifier().is_none() {
         return;
     }
@@ -168,13 +183,19 @@ pub fn warn_if_denied(cx: &mut App) {
     UNUserNotificationCenter::currentNotificationCenter()
         .requestAuthorizationWithOptions_completionHandler(UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound, &answer);
     cx.spawn(async move |cx| {
-        if rx.await != Ok(true) {
-            return;
-        }
+        let Ok(denied) = rx.await else { return };
         cx.update(|cx| {
+            if denied == cx.has_global::<Denied>() {
+                return;
+            }
+            if !denied {
+                cx.remove_global::<Denied>();
+                cx.refresh_windows();
+                return;
+            }
             cx.set_global(Denied);
             cx.refresh_windows();
-            if crate::settings::SettingsGlobal::of(cx).settings.notify_agents {
+            if toast && crate::settings::SettingsGlobal::of(cx).settings.notify_agents {
                 let open: std::rc::Rc<dyn Fn(&mut App)> = std::rc::Rc::new(|_| open_system_settings());
                 crate::ui::toast::info(cx, "Notifications are off for Shepherd in macOS. Click to turn them on.", Some(open));
             }
