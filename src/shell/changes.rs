@@ -948,6 +948,8 @@ impl Changes {
             fold.collapsed = collapse;
             fold.toggled_at = None;
         }
+        // the folders shut and open with their files, the tree view's or not
+        self.closed_dirs = if collapse { parsed.files.iter().map(|f| directory_of(&f.path).to_string()).filter(|d| !d.is_empty()).collect() } else { Default::default() };
         self.reflatten(cx);
     }
 
