@@ -64,7 +64,9 @@ impl Worktrees for Git {
         Box::pin(async move {
             let snapshot = self.0.snapshot().await?;
             let tree = self.checkout(&snapshot, &workspace).await?;
-            let open: HashMap<String, String> = snapshot.workspaces.iter().filter_map(|w| Some((w.worktree.as_ref()?.checkout_path.clone(), w.workspace_id.clone()))).collect();
+            let mut open: HashMap<String, String> = snapshot.workspaces.iter().filter_map(|w| Some((w.worktree.as_ref()?.checkout_path.clone(), w.workspace_id.clone()))).collect();
+            // a workspace whose checkout was only just found has it open, though the snapshot taken before says no
+            open.entry(tree.checkout_path.clone()).or_insert(workspace);
             spawn_blocking(move || list(&tree.checkout_path, |path| open.get(path).cloned())).await?
         })
     }
