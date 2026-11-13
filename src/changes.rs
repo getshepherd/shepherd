@@ -15,6 +15,10 @@ pub const FILE_HEADER_HEIGHT: f32 = crate::ui::surface_chrome::HEADER_HEIGHT;
 pub const HUNK_HEADER_HEIGHT: f32 = 28.0;
 pub const DIFF_LINE_HEIGHT: f32 = 21.0;
 pub const NOTICE_HEIGHT: f32 = 24.0;
+/// The tree view's folder row.
+pub const DIRECTORY_HEIGHT: f32 = 30.0;
+/// An image file's picture row.
+pub const IMAGE_HEIGHT: f32 = 240.0;
 pub const BODY_BOTTOM_PAD: f32 = 8.0;
 /// Gutter width per line-number column.
 pub const GUTTER_WIDTH: f32 = 36.0;
@@ -151,6 +155,8 @@ pub struct FileDiff {
     pub old_path: Option<String>,
     pub status: FileStatus,
     pub binary: bool,
+    /// An image the checkout has: drawn under its header in place of the binary notice. The view sets it, not the parser.
+    pub image: bool,
     /// Parser-collected notices (mode changes etc.).
     pub notices: Vec<String>,
     pub hunks: Vec<Hunk>,
@@ -168,6 +174,7 @@ impl FileDiff {
             old_path,
             status: FileStatus::Modified,
             binary: false,
+            image: false,
             notices: Vec::new(),
             hunks: Vec::new(),
             additions: 0,
@@ -411,7 +418,7 @@ pub fn file_notices(file: &FileDiff) -> Vec<String> {
         }
         FileStatus::Modified => {}
     }
-    if file.binary {
+    if file.binary && !file.image {
         notices.push("Binary file — contents not shown".to_string());
     }
     notices.extend(file.notices.iter().cloned());
@@ -869,7 +876,11 @@ pub fn full_highlights(file: &FileDiff, language: Lang, old: Option<&str>, new: 
 /// wrapped line rows are measured by the list at the current pane width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffRow {
+    /// The tree view's folder row, over the files of one directory; `file` is its first.
+    Directory { file: u32 },
     FileHeader { file: u32 },
+    /// An image file's picture, under its notices.
+    Image { file: u32 },
     Notice { file: u32, notice: u32 },
     HunkHeader { file: u32, hunk: u32 },
     Line { file: u32, hunk: u32, line: u32 },
@@ -889,7 +900,9 @@ pub enum DiffRow {
 impl DiffRow {
     pub fn file(self) -> usize {
         match self {
-            Self::FileHeader { file }
+            Self::Directory { file }
+            | Self::FileHeader { file }
+            | Self::Image { file }
             | Self::Notice { file, .. }
             | Self::HunkHeader { file, .. }
             | Self::Line { file, .. }
@@ -904,7 +917,9 @@ impl DiffRow {
     /// `FoldingBody` is height-animated, so it reports 0 and never lands in a height sum.
     fn height(self, comments: &[ReviewComment]) -> f32 {
         match self {
+            DiffRow::Directory { .. } => DIRECTORY_HEIGHT,
             DiffRow::FileHeader { .. } => FILE_HEADER_HEIGHT,
+            DiffRow::Image { .. } => IMAGE_HEIGHT,
             DiffRow::Notice { .. } => NOTICE_HEIGHT,
             DiffRow::HunkHeader { .. } => HUNK_HEADER_HEIGHT,
             DiffRow::Line { .. } | DiffRow::SplitLine { .. } => DIFF_LINE_HEIGHT,
@@ -925,7 +940,7 @@ pub fn body_height(file: &FileDiff, comments: &[ReviewComment], draft: Option<(C
 /// is a safe hint for both.
 fn body_row_count(file: &FileDiff) -> usize {
     let lines: usize = file.hunks.iter().map(|h| h.lines.len()).sum();
-    file_notices(file).len() + file.hunks.len() + lines + 1
+    file_notices(file).len() + usize::from(file.image) + file.hunks.len() + lines + 1
 }
 
 pub fn body_rows(file_ix: u32, file: &FileDiff, comments: &[ReviewComment], draft: Option<(CommentSide, u32)>, mode: DiffMode) -> Vec<DiffRow> {
@@ -945,6 +960,9 @@ pub fn body_rows(file_ix: u32, file: &FileDiff, comments: &[ReviewComment], draf
     let mut rows = Vec::with_capacity(body_row_count(file));
     for notice in 0..file_notices(file).len() {
         rows.push(DiffRow::Notice { file: file_ix, notice: notice as u32 });
+    }
+    if file.image {
+        rows.push(DiffRow::Image { file: file_ix });
     }
     for (hunk_ix, hunk) in file.hunks.iter().enumerate() {
         rows.push(DiffRow::HunkHeader { file: file_ix, hunk: hunk_ix as u32 });
@@ -975,11 +993,16 @@ pub fn flatten_rows(
     comments: &[ReviewComment],
     draft: Option<(&str, CommentSide, u32)>,
     mode: DiffMode,
+    tree: bool,
     mut collapsed: impl FnMut(usize) -> bool,
 ) -> (Vec<DiffRow>, Vec<std::ops::Range<usize>>) {
     let mut rows = Vec::new();
     let mut ranges = Vec::with_capacity(files.len());
     for (ix, file) in files.iter().enumerate() {
+        // a folder's row sits between two files' spans, in neither
+        if tree && !directory_of(&file.path).is_empty() && (ix == 0 || directory_of(&files[ix - 1].path) != directory_of(&file.path)) {
+            rows.push(DiffRow::Directory { file: ix as u32 });
+        }
         let start = rows.len();
         rows.push(DiffRow::FileHeader { file: ix as u32 });
         if !collapsed(ix) {
@@ -990,6 +1013,11 @@ pub fn flatten_rows(
         ranges.push(start..rows.len());
     }
     (rows, ranges)
+}
+
+/// A path's folder, `""` at the root.
+pub fn directory_of(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(dir, _)| dir)
 }
 
 /// The file header that should remain visible for a logical list position.
@@ -1777,7 +1805,7 @@ rename to new_name.rs
     #[test]
     fn rows_flatten_to_line_granularity() {
         let files = parse_patch(PATCH);
-        let (rows, ranges) = flatten_rows(&files, &[], None, DiffMode::Unified, |_| false);
+        let (rows, ranges) = flatten_rows(&files, &[], None, DiffMode::Unified, false, |_| false);
         assert_eq!(ranges.len(), files.len());
         // Every file's span starts with its header…
         for (ix, range) in ranges.iter().enumerate() {
@@ -1794,8 +1822,20 @@ rename to new_name.rs
         assert_eq!(main_rows[1], DiffRow::HunkHeader { file: 0, hunk: 0 });
         assert_eq!(*main_rows.last().unwrap(), DiffRow::BodyPad { file: 0 });
 
+        // The tree view puts a folder's row before its first file, outside every span.
+        let tree_files: Vec<FileDiff> = ["a.rs", "src/b.rs", "src/c.rs", "src/ui/d.rs"].map(|p| FileDiff::new(p.into(), None)).into();
+        let (rows, ranges) = flatten_rows(&tree_files, &[], None, DiffMode::Unified, true, |_| true);
+        assert_eq!(
+            rows,
+            [0, 1, 2, 3].map(|f| DiffRow::FileHeader { file: f }).iter().enumerate().flat_map(|(ix, header)| match ix {
+                1 | 3 => vec![DiffRow::Directory { file: ix as u32 }, *header],
+                _ => vec![*header],
+            }).collect::<Vec<_>>()
+        );
+        assert_eq!(rows[ranges[1].start], DiffRow::FileHeader { file: 1 });
+
         // A collapsed file contributes its header row only.
-        let (rows, ranges) = flatten_rows(&files, &[], None, DiffMode::Unified, |ix| ix == 0);
+        let (rows, ranges) = flatten_rows(&files, &[], None, DiffMode::Unified, false, |ix| ix == 0);
         assert_eq!(ranges[0].len(), 1);
         assert_eq!(rows[ranges[1].start], DiffRow::FileHeader { file: 1 });
 
@@ -1955,7 +1995,7 @@ rename to new_name.rs
     #[test]
     fn split_flattening_pairs_rows_and_keeps_heights_analytic() {
         let files = parse_patch(PATCH);
-        let (rows, ranges) = flatten_rows(&files, &[], None, DiffMode::Split, |_| false);
+        let (rows, ranges) = flatten_rows(&files, &[], None, DiffMode::Split, false, |_| false);
         assert_eq!(ranges.len(), files.len());
         assert_eq!(ranges.last().unwrap().end, rows.len());
 

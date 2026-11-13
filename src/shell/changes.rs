@@ -145,6 +145,13 @@ impl FileHorizontalState {
     }
 }
 
+/// An image file's picture: read off the checkout (or its machine) once per parse.
+enum ImagePreview {
+    Loading(#[allow(dead_code)] Task<()>),
+    Ready(Arc<gpui::Image>),
+    Failed,
+}
+
 struct ParsedDiff {
     /// The capture's checksum and the scope: identity of the parsed content.
     key: String,
@@ -311,6 +318,10 @@ pub(super) struct Changes {
     mode: DiffMode,
     /// Wrap long source lines instead of exposing the horizontal code plane.
     wrap_lines: bool,
+    /// Files in folder order under their folders' rows.
+    tree: bool,
+    /// Image files' pictures, by path, for the parse shown.
+    images: HashMap<String, ImagePreview>,
     /// Comparison ref for [`DiffScope::Branch`]: preset to the repo's default branch once the branch list lands.
     base_ref: Option<String>,
     branches: Vec<String>,
@@ -384,6 +395,8 @@ impl Changes {
             scope: DiffScope::default(),
             mode: DiffMode::from_split(settings.diff_split),
             wrap_lines: settings.diff_wrap,
+            tree: settings.diff_tree,
+            images: HashMap::new(),
             base_ref: None,
             branches: Vec::new(),
             branches_for: None,
@@ -687,11 +700,16 @@ impl Changes {
         }));
     }
 
-    fn parsed_files(&mut self, key: String, files: Vec<FileDiff>, truncated: bool, cx: &mut Context<Self>) {
+    fn parsed_files(&mut self, key: String, mut files: Vec<FileDiff>, truncated: bool, cx: &mut Context<Self>) {
         // Late results for a superseded diff are re-checked by key.
         if self.diff.as_ref().map(|d| self.parse_key(d)).as_deref() != Some(key.as_str()) {
             return;
         }
+        // a checkout's image is drawn; a PR's isn't, the checkout may hold another version of it
+        for file in &mut files {
+            file.image = self.pr.is_none() && file.binary && file.status != FileStatus::Deleted && crate::terminal::pane::is_image(std::path::Path::new(&file.path));
+        }
+        self.images.clear();
         // the tree moved under a reader: their folds stay, and the file at the top of the list
         let top = self.top_file_path();
         let additions = files.iter().map(|f| f.additions).sum();
@@ -713,6 +731,7 @@ impl Changes {
             &staged,
             draft.as_ref().map(|(path, side, line)| (path.as_str(), *side, *line)),
             self.mode,
+            self.tree,
             |ix| self.folds.get(&files[ix].path).is_some_and(|fold| fold.collapsed),
         );
         self.comment_key = comment_state_key(&staged, draft.as_ref());
@@ -959,6 +978,57 @@ impl Changes {
         }
     }
 
+    /// Swap the list of paths ⇄ the files under their folders' rows. The parse already lists a folder's files in one run
+    /// (`tree_order`), so only rows are added.
+    pub(super) fn toggle_tree(&mut self, cx: &mut Context<Self>) {
+        self.tree = !self.tree;
+        let tree = self.tree;
+        save_from_sidebar(cx, |s| s.diff_tree = tree);
+        self.cursor = None;
+        self.reflatten(cx);
+    }
+
+    /// A folder row's click: its files all shut, or all open when they're all shut already.
+    fn toggle_directory(&mut self, file_ix: usize, cx: &mut Context<Self>) {
+        let Some(files) = self.parsed.as_ref().map(|p| p.files.clone()) else { return };
+        let Some(dir) = files.get(file_ix).map(|f| directory_of(&f.path)) else { return };
+        let group = files.iter().filter(|f| directory_of(&f.path) == dir);
+        let collapse = !group.clone().all(|f| self.folds.get(&f.path).is_some_and(|fold| fold.collapsed));
+        for file in group {
+            let fold = self.folds.entry(file.path.clone()).or_default();
+            fold.collapsed = collapse;
+            fold.toggled_at = None;
+        }
+        self.reflatten(cx);
+    }
+
+    /// An image file's picture, asked for when its row is first drawn.
+    fn image_of(&mut self, path: &str, cx: &mut Context<Self>) -> Option<&ImagePreview> {
+        if !self.images.contains_key(path) {
+            let (dir, root) = (self.dir.clone()?, self.diff.as_ref()?.root.clone());
+            let (machine, full) = crate::changes::file_location(&dir, &root, path);
+            let key = path.to_string();
+            let task = cx.spawn(async move |this, cx| {
+                let bytes = cx
+                    .background_spawn(async move {
+                        match machine {
+                            Some(target) => crate::herdr::read_file(&target, &full.to_string_lossy()).ok(),
+                            None => std::fs::read(&full).ok(),
+                        }
+                    })
+                    .await;
+                let image = bytes.and_then(|bytes| Some(Arc::new(gpui::Image::from_bytes(crate::web::image_format(&bytes)?, bytes))));
+                this.update(cx, |this, cx| {
+                    this.images.insert(key, image.map_or(ImagePreview::Failed, ImagePreview::Ready));
+                    cx.notify();
+                })
+                .ok();
+            });
+            self.images.insert(path.to_string(), ImagePreview::Loading(task));
+        }
+        self.images.get(path)
+    }
+
     /// Rebuilds the row model and re-anchors the scroll onto whichever file was under the viewport's top edge (row indices
     /// do not survive the re-pairing).
     fn reflatten(&mut self, cx: &mut Context<Self>) {
@@ -976,6 +1046,7 @@ impl Changes {
             &staged,
             draft.as_ref().map(|(path, side, line)| (path.as_str(), *side, *line)),
             self.mode,
+            self.tree,
             |ix| self.folds.get(&files[ix].path).is_some_and(|fold| fold.collapsed),
         );
         self.list.reset_with_uniform_height(rows.len(), px(DIFF_LINE_HEIGHT));
@@ -1327,6 +1398,24 @@ impl Changes {
                 let fold = self.folds.get(&file_diff.path).copied().unwrap_or_default();
                 self.render_file_header(file as usize, file_diff, &fold, FileHeaderPresentation::Row, &theme, cx)
             }
+            DiffRow::Directory { file } => self.render_directory_row(file as usize, &files, &theme, cx),
+            DiffRow::Image { .. } => {
+                let path = file_diff.path.clone();
+                let picture = match self.image_of(&path, cx) {
+                    Some(ImagePreview::Ready(image)) => gpui::img(image.clone()).max_w_full().max_h_full().object_fit(gpui::ObjectFit::Contain).into_any_element(),
+                    Some(ImagePreview::Failed) => div().text_size(px(12.0)).text_color(theme.text_faint).child("Couldn't read this image").into_any_element(),
+                    _ => empty(),
+                };
+                div()
+                    .w_full()
+                    .h(px(IMAGE_HEIGHT))
+                    .p(px(12.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(div().size_full().flex().items_center().justify_center().rounded(px(6.0)).bg(theme.wash(0.03)).p(px(8.0)).child(picture))
+                    .into_any_element()
+            }
             DiffRow::Notice { notice, .. } => file_notices(file_diff).into_iter().nth(notice as usize).map(|text| notice_row(text, &theme)).unwrap_or_else(empty),
             DiffRow::HunkHeader { hunk, .. } => file_diff.hunks.get(hunk as usize).map(|h| hunk_header_row(&h.header, &theme)).unwrap_or_else(empty),
             DiffRow::Line { hunk, line, .. } => {
@@ -1421,6 +1510,29 @@ impl Changes {
         }
     }
 
+    /// The tree view's folder row: its chevron folds all its files.
+    fn render_directory_row(&mut self, file_ix: usize, files: &[FileDiff], theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let Some(dir) = files.get(file_ix).map(|f| directory_of(&f.path).to_string()) else { return gpui::Empty.into_any_element() };
+        let open = files.iter().filter(|f| directory_of(&f.path) == dir).any(|f| !self.folds.get(&f.path).is_some_and(|fold| fold.collapsed));
+        let hover_bg = theme.wash(0.05);
+        div()
+            .id(SharedString::from(format!("dir-hdr-{file_ix}")))
+            .w_full()
+            .h(px(DIRECTORY_HEIGHT))
+            .when(file_ix > 0, |el| el.border_t_1().border_color(theme.wash(0.04)))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .px(px(12.0))
+            .cursor_pointer()
+            .hover(move |s| s.bg(hover_bg))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_directory(file_ix, cx)))
+            .child(gpui::svg().path(if open { "icons/alt-arrow-down.svg" } else { "icons/alt-arrow-right.svg" }).size(px(13.0)).flex_none().text_color(theme.text_muted.opacity(0.7)))
+            .child(gpui::svg().path(if open { "icons/solar/folder-open.svg" } else { "icons/folder.svg" }).size(px(14.0)).flex_none().text_color(theme.text_muted))
+            .child(div().flex_1().min_w_0().truncate().font_family(theme.font_terminal.clone()).text_size(px(13.0)).text_color(theme.text_muted).child(dir))
+            .into_any_element()
+    }
+
     fn render_file_header(&mut self, ix: usize, file: &FileDiff, fold: &FileFold, presentation: FileHeaderPresentation, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let (adds, dels) = (file.additions, file.deletions);
         let sticky = presentation == FileHeaderPresentation::Sticky;
@@ -1438,6 +1550,9 @@ impl Changes {
             chevron.into_any_element()
         };
         let mono = theme.font_terminal.clone();
+        // under a folder's row the name says enough; the sticky header keeps the path, its folder's row scrolled away
+        let nested = self.tree && !sticky && !directory_of(&file.path).is_empty();
+        let shown = if nested { file.path.rsplit('/').next().unwrap_or(&file.path).to_string() } else { file.path.clone() };
         // Header row: chevron + mono path + right-aligned +N / −N counts on a slightly raised wash. The header carries the
         // section separator.
         div()
@@ -1452,6 +1567,7 @@ impl Changes {
             .items_center()
             .gap(px(8.0))
             .px(px(12.0))
+            .when(nested, |el| el.pl(px(32.0)))
             .bg(theme.wash(0.025))
             .when(self.keys && self.cursor.is_some() && self.cursor == self.row_ranges.get(ix).map(|r| r.start), |el| el.bg(theme.selected))
             .cursor_pointer()
@@ -1480,7 +1596,7 @@ impl Changes {
                     .text_size(px(13.0))
                     .text_color(theme.text_muted)
                     .tooltip(path_tip(file.path.clone()))
-                    .child(SharedString::from(file.path.clone())),
+                    .child(SharedString::from(shown)),
             )
             .when(file.binary, |el| el.child(div().flex_none().text_size(px(10.0)).text_color(theme.text_faint).child("BIN")))
             .when(adds > 0 || !file.binary, |el| el.child(count_label(format!("+{adds}"), theme.diff_add, theme)))
@@ -1506,7 +1622,7 @@ impl Changes {
         let files = self.parsed.as_ref()?.files.clone();
         let file = files.get(sticky.file_ix)?;
         let fold = self.folds.get(&file.path).copied().unwrap_or_default();
-        let next_header_y = sticky.next_header_row.and_then(|row| {
+        let next_header_y = sticky.next_header_row.map(|row| if row > 0 && matches!(self.rows.get(row - 1), Some(DiffRow::Directory { .. })) { row - 1 } else { row }).and_then(|row| {
             let bounds = self.list.bounds_for_item(row)?;
             Some(f32::from(bounds.origin.y - self.list.viewport_bounds().origin.y))
         });
@@ -1595,6 +1711,7 @@ impl Changes {
             });
         let split = Self::header_toggle("changes-split", "icons/split-columns.svg", "Split view", self.mode.is_split(), theme).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_mode(cx)));
         let wrap = Self::header_toggle("changes-wrap", "icons/wrap-text.svg", "Wrap long lines", self.wrap_lines, theme).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_wrap(cx)));
+        let tree = Self::header_toggle("changes-tree", "icons/solar/folder-with-files.svg", "Group by folder", self.tree, theme).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_tree(cx)));
         let fold_all = Self::header_toggle("changes-fold-all", "icons/fold-vertical.svg", self.fold_all_label(), false, theme).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_collapse_all(cx)));
         let trailing = div()
             .flex_none()
@@ -1602,6 +1719,7 @@ impl Changes {
             .items_center()
             .gap(px(CONTROL_GAP))
             .when(scope == DiffScope::WorkingTree, |el| el.child(discard))
+            .child(tree)
             .child(split)
             .child(wrap)
             .child(fold_all);
@@ -2248,6 +2366,11 @@ fn render_file_body_upto(file: &FileDiff, highlight: Option<Arc<DiffHighlights>>
             }
             children.push(notice_row(notice, theme));
             y += NOTICE_HEIGHT;
+        }
+        // ponytail: the picture's room only, blank for the tween's few frames
+        if file.image {
+            children.push(div().w_full().h(px(IMAGE_HEIGHT)).into_any_element());
+            y += IMAGE_HEIGHT;
         }
         for (hunk_ix, hunk) in file.hunks.iter().enumerate() {
             if y >= max_px {
