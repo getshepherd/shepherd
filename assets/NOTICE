@@ -27,7 +27,7 @@ Simple Icons (assets/icons/<name>-mark.svg for: bat, bazel, bun, cloudflare, cma
 
 Rex (assets/icons/<name>-mark.svg for: btop, d2, fx, gnu, kakoune, moon, pixi, proto, yazi)
   Logos of those open-source projects as drawn in the icon catalog of Rex Beta.app (Superlogical), read out as SVG,
-  with their viewBoxes made square. They name the program running in a tab.
+  with their viewBoxes made square (scripts/rex-icons.swift). They name the program running in a tab.
 
 herdr-reviewr
   The last turn in src/changes.rs (a turn as a worktree's agents' rest-to-work edge, a snapshot on a copy of the index,
