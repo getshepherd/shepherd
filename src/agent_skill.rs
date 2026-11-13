@@ -47,13 +47,33 @@ fn guide(backend: Option<&str>) -> Result<String, String> {
     Ok(if name == "herdr" { format!("{GUIDE}\n{text}") } else { format!("{GUIDE}\n{text}\n{WORKTREES}") })
 }
 
-/// `shepherd skill [backend]`: prints the guide, for this terminal's backend unless one is named.
+/// The guide's last section: the extensions that have a skill, each asked for it (`extensions::skills`), and how to
+/// read one. Nothing when none has.
+fn extensions_section(skills: &[(String, String)]) -> String {
+    if skills.is_empty() {
+        return String::new();
+    }
+    let list: String = skills.iter().map(|(name, skill)| format!("- `{name}`: {}\n", crate::extensions::skill_description(skill))).collect();
+    format!(
+        "\n# Extensions\n\nThe user's Shepherd extensions: local tools, each with a page the user may have open in Shepherd and a CLI for \
+         you. Before using one, read its skill: run this command again with the extension's name after `skill`.\n\n{list}"
+    )
+}
+
+/// `shepherd skill [backend | extension]`: prints the guide, for this terminal's backend unless one is named, with the
+/// extensions that have skills; or an extension's skill.
 // ponytail: a release build on Windows has no console, so this prints nothing there, as `hooks` does
 pub fn cli(args: &[String]) -> i32 {
-    let backend = args.first().map(String::as_str).or_else(|| detect(|name| std::env::var(name).ok()));
+    let skills = crate::extensions::skills(&crate::extensions::root());
+    let named = args.first().map(String::as_str);
+    if let Some((_, skill)) = named.filter(|n| !BACKENDS.iter().any(|(b, _)| b == n)).and_then(|n| skills.iter().find(|(name, _)| name == n)) {
+        println!("{skill}");
+        return 0;
+    }
+    let backend = named.or_else(|| detect(|name| std::env::var(name).ok()));
     match guide(backend) {
         Ok(text) => {
-            print!("{text}");
+            print!("{text}{}", extensions_section(&skills));
             0
         }
         Err(e) => {
@@ -69,10 +89,11 @@ fn stub(exe: &Path) -> String {
     format!(
         "---\nname: shepherd\ndescription: Subagents as interactive `claude` or `codex` in their own terminals of the multiplexer Shepherd runs on \
          (herdr, Rex, hc or tmux), where the user sees each one and can take it over. Use whenever work goes to another agent: a new agent the \
-         user asks for, a subagent, a review, research, a parallel subtask, a handoff to its own branch, or a skill that asks for subagents.\n---\n\
+         user asks for, a subagent, a review, research, a parallel subtask, a handoff to its own branch, or a skill that asks for subagents. \
+         Also lists the user's Shepherd extensions (local tools with a page in Shepherd and a CLI) and their skills.\n---\n\
          {MARK} (Settings → Backend → Agent skill), which rewrites this file: edits here are lost. -->\n\n\
          Run `'{exe}' skill` and follow the guide it prints. It comes from the installed Shepherd and gives the commands of the backend this \
-         terminal runs on.\n"
+         terminal runs on, and the extensions you can use.\n"
     )
 }
 
@@ -124,6 +145,13 @@ pub fn refresh() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extensions_with_skills_are_listed_by_their_description() {
+        assert_eq!(extensions_section(&[]), "");
+        let section = extensions_section(&[("prs".into(), "---\nname: prs\ndescription: Every PR of a task.\n---\n# prs".into())]);
+        assert!(section.starts_with("\n# Extensions\n") && section.ends_with("- `prs`: Every PR of a task.\n"), "{section}");
+    }
 
     #[test]
     fn inner_backend_first() {

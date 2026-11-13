@@ -142,6 +142,25 @@ pub fn git_of(dir: &str, cx: &mut App) -> Option<Git> {
     cached(dir, GIT_TTL, read_git, cx)
 }
 
+/// `dir`'s checkout and its repo's common git dir, absolute (`--show-toplevel`, `--git-common-dir`): what an
+/// extension's page is told about its project and worktree.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Repo {
+    pub top: String,
+    pub common: String,
+}
+
+/// `dir`'s [`Repo`], once git has been asked; none outside a work tree.
+pub fn repo_of(dir: &str, cx: &mut App) -> Option<Repo> {
+    cached(dir, GIT_TTL, read_repo, cx)
+}
+
+fn read_repo(dir: &str) -> Option<Repo> {
+    let out = git_in(dir, &["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"])?;
+    let mut lines = out.lines();
+    Some(Repo { top: lines.next()?.to_string(), common: lines.next()?.to_string() })
+}
+
 /// Asks git about `dir` again on the next render, as after a checkout.
 pub fn refresh_git(dir: &str, cx: &mut App) {
     if let Some(entry) = cx.default_global::<Cache<Git>>().0.get_mut(dir) {

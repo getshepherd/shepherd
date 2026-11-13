@@ -121,11 +121,14 @@ fn a_browser_tab_whose_page_is_gone_falls_back() {
 
 #[test]
 fn offers_follow_the_remote_and_the_platform() {
-    assert_eq!(offered(true, true, true), [Offer::Browser, Offer::Diffs, Offer::Files, Offer::PullRequest, Offer::Device]);
-    assert_eq!(offered(false, true, true), [Offer::Browser, Offer::Diffs, Offer::Files, Offer::Device]);
-    assert_eq!(offered(false, false, true), [Offer::Browser, Offer::Device]);
-    assert_eq!(offered(true, true, false), [Offer::Diffs, Offer::Files, Offer::PullRequest, Offer::Device]);
-    assert_eq!(offered(false, false, false), [Offer::Device]);
+    assert_eq!(offered(true, true, true, &[]), [Offer::Browser, Offer::Diffs, Offer::Files, Offer::PullRequest, Offer::Device]);
+    assert_eq!(offered(false, true, true, &[]), [Offer::Browser, Offer::Diffs, Offer::Files, Offer::Device]);
+    assert_eq!(offered(false, false, true, &[]), [Offer::Browser, Offer::Device]);
+    assert_eq!(offered(true, true, false, &[]), [Offer::Diffs, Offer::Files, Offer::PullRequest, Offer::Device]);
+    assert_eq!(offered(false, false, false, &[]), [Offer::Device]);
+    let prs = ["prs".to_string()];
+    assert_eq!(offered(false, false, true, &prs), [Offer::Browser, Offer::Device, Offer::Extension("prs".into())]);
+    assert_eq!(offered(false, false, false, &prs), [Offer::Device], "an extension's page needs a window that embeds pages");
 }
 
 #[test]
@@ -201,4 +204,10 @@ fn closing_leaves_the_expansion_by_every_way() {
     closed(|p| p.toggle_seen(true));
     closed(|p| p.toggle_pull_request(true));
     closed(|p| p.close(&Surface::PullRequest));
+}
+
+#[test]
+fn an_extension_tab_is_known_by_its_key() {
+    let tab = Surface::Extension(shepherd::extensions::panel_page("w1", "prs"));
+    assert_eq!(Surface::of_key(tab.key()), tab);
 }

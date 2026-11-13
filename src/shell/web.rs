@@ -129,6 +129,8 @@ pub(super) struct Pages {
     /// The entry shown in place of the tabs and panes; `None` shows the tabs and panes.
     pub(super) shown: Option<String>,
     pub(super) live: HashMap<PageKey, Page>,
+    /// What each extension's page was told last (`tell_extensions`), so it is told again only on a change or a load.
+    pub(super) told: HashMap<PageKey, String>,
     /// Pages opened on a machine still waiting for their forward, or whose forward failed.
     forwards: HashMap<PageKey, (String, Forward)>,
     /// Each page's favicon (a machine's page has its own) and the URL it was fetched for; in memory only, so fetched
@@ -317,13 +319,21 @@ impl Shell {
         match self.panel()?.active.as_ref().filter(|_| self.right_panel_now(window) > 0.)? {
             crate::right_panel::Surface::Browser(id) => Some((id.clone(), None)),
             crate::right_panel::Surface::Device(key) => self.device_page_key(key).map(|id| (id, None)),
+            crate::right_panel::Surface::Extension(id) => Some((id.clone(), None)),
             crate::right_panel::Surface::Diff(_) | crate::right_panel::Surface::PullRequest | crate::right_panel::Surface::Files | crate::right_panel::Surface::File(_) => None,
         }
     }
 
-    /// The panel's pages' entries: browser tabs' and devices' 3D views'.
-    fn panel_entries(&self, cx: &App) -> impl Iterator<Item = WebEntry> + '_ {
-        self.browser.entries().chain(self.device_pages(Theme::of(cx)))
+    /// The panel's pages' entries: browser tabs', devices' 3D views' and every workspace's extension tabs'.
+    fn panel_entries<'a>(&'a self, cx: &'a App) -> impl Iterator<Item = WebEntry> + 'a {
+        let extensions = self.right.panels.values().flat_map(|p| &p.tabs).filter_map(move |s| match s {
+            crate::right_panel::Surface::Extension(id) => {
+                let ext = crate::extensions::by_page(cx, id)?;
+                Some(WebEntry { id: id.clone(), name: ext.title(), url: ext.url(), ..Default::default() })
+            }
+            _ => None,
+        });
+        self.browser.entries().chain(self.device_pages(Theme::of(cx))).chain(extensions)
     }
 
     /// The page on screen and its entry: a sidebar page's, else the panel's. Never both: a sidebar page hides the panel.
@@ -347,9 +357,6 @@ impl Shell {
         }
         if self.ensure_page(&id, window, cx) {
             self.pages.shown = Some(id);
-            if let Some((key, _)) = self.shown_page(cx) {
-                self.tell_extension(&key, window, cx);
-            }
             cx.notify();
         }
     }
@@ -669,8 +676,9 @@ impl Shell {
             }
             PageEvent::Load(started) => {
                 page.loading = started;
+                // a load forgets `window.shepherd`: the next render tells it again
                 if !started {
-                    self.tell_extension(&key, window, cx);
+                    self.pages.told.remove(&key);
                 }
             }
             PageEvent::Outside(url) => crate::ui::open_outside(&url, cx),
@@ -760,6 +768,10 @@ impl Shell {
         }
         self.fetch_favicons(cx);
         self.sync_browser(window, cx);
+        // an extension removed takes its tabs with it
+        for panel in self.right.panels.values_mut() {
+            panel.retain_where(|s| !matches!(s, crate::right_panel::Surface::Extension(id) if crate::extensions::by_page(cx, id).is_none()));
+        }
         let mut entries = sidebar_entries(cx);
         entries.extend(self.panel_entries(cx));
         // a page on a machine also goes when its entry no longer opens there
@@ -780,6 +792,7 @@ impl Shell {
         if self.shown_page(cx).is_none() {
             self.pages.shown = None;
         }
+        self.tell_extensions(window, cx);
         // a panel gone from under the keyboard, or left for another workspace, gives it back
         if self.right.focused.is_some() && (self.right.focused != self.shown_tab().map(|t| t.workspace_id) || !self.right_panel_shown(window)) {
             self.release_panel();
@@ -1018,8 +1031,8 @@ impl Shell {
 
     /// Starts (`up`) or stops the extension's server off the main thread; once started, its page is loaded again.
     /// What failed is a toast.
-    fn extension_server(&mut self, ext: crate::extensions::Extension, up: bool, cx: &mut Context<Self>) {
-        let key = self.page_key(&ext.entry());
+    pub(super) fn extension_server(&mut self, ext: crate::extensions::Extension, up: bool, cx: &mut Context<Self>) {
+        let name = ext.name.clone();
         let task = cx.background_spawn(async move {
             if up { crate::extensions::start_server(&ext) } else { crate::extensions::stop_server(&ext) }
         });
@@ -1027,7 +1040,12 @@ impl Shell {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(()) if up => this.reload_page(&key),
+                    // its sidebar page and its tabs in the panels
+                    Ok(()) if up => {
+                        let keys: Vec<PageKey> =
+                            this.pages.live.keys().filter(|k| crate::extensions::by_page(cx, &k.0).is_some_and(|e| e.name == name)).cloned().collect();
+                        keys.iter().for_each(|k| this.reload_page(k));
+                    }
                     Ok(()) => {}
                     Err(why) => crate::ui::toast::error(cx, why),
                 }
@@ -1037,12 +1055,48 @@ impl Shell {
         .detach();
     }
 
-    /// Tells page `key`, when it is an extension's, the folder of the pane shown under it (see
-    /// `extensions::state_script`).
-    fn tell_extension(&self, key: &PageKey, window: &Window, cx: &mut App) {
-        let (Some(ext), Some(page)) = (crate::extensions::by_page(cx, &key.0), self.pages.live.get(key)) else { return };
-        let dir = crate::ui::statusbar::pane_dir(self.snapshot.as_ref(), self.active_pane(window, cx).as_deref());
-        let _ = page.view.evaluate_script(&crate::extensions::state_script(&ext.origin(), dir.as_deref()));
+    /// Tells each extension's page what it is for (`extensions::context`) when that changed: a panel's page, its
+    /// workspace; a sidebar page, the workspace shown.
+    fn tell_extensions(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let shown = self.shown_tab().map(|t| t.workspace_id);
+        let pages: Vec<(PageKey, String)> = self
+            .pages
+            .live
+            .keys()
+            .filter_map(|key| Some((key.clone(), crate::extensions::by_page(cx, &key.0)?.origin())))
+            .collect();
+        for (key, origin) in pages {
+            let workspace = crate::extensions::panel_of(&key.0).map(|(w, _)| w.to_string()).or_else(|| shown.clone());
+            let script = crate::extensions::state_script(&origin, &self.extension_context(workspace.as_deref(), window, cx));
+            if self.pages.told.get(&key) != Some(&script)
+                && let Some(page) = self.pages.live.get(&key)
+            {
+                let _ = page.view.evaluate_script(&script);
+                self.pages.told.insert(key, script);
+            }
+        }
+        let live = &self.pages.live;
+        self.pages.told.retain(|key, _| live.contains_key(key));
+    }
+
+    /// What an extension's page for `workspace` is told: the folder of its focused pane, and the project and worktree
+    /// of its checkout (the backend's, else that folder's).
+    fn extension_context(&self, workspace: Option<&str>, window: &Window, cx: &mut App) -> serde_json::Value {
+        use crate::ui::statusbar::{git_of, pane_dir, repo_of};
+        let snapshot = self.snapshot.as_ref();
+        let Some(ws) = workspace.and_then(|id| snapshot?.workspaces.iter().find(|w| w.workspace_id == id)) else {
+            return crate::extensions::context(None, None, None, None);
+        };
+        let pane = match self.shown_tab().is_some_and(|t| t.workspace_id == ws.workspace_id) {
+            true => self.active_pane(window, cx),
+            false => ws.active_tab_id.as_ref().and_then(|tab| snapshot?.pane_frames(tab).into_iter().find(|f| f.focused)).map(|f| f.pane_id),
+        };
+        let dir = pane_dir(snapshot, pane.as_deref());
+        let checkout = ws.worktree.as_ref().map(|t| t.checkout_path.clone()).filter(|p| !p.is_empty()).or_else(|| dir.clone());
+        let repo = checkout.as_deref().and_then(|d| repo_of(d, cx));
+        let branch = checkout.as_deref().and_then(|d| git_of(d, cx)).filter(|g| !g.detached).map(|g| g.branch);
+        let workspace = Some((ws.workspace_id.as_str(), ws.label.as_str()));
+        crate::extensions::context(dir.as_deref(), workspace, repo.as_ref().map(|r| (r.top.as_str(), r.common.as_str())), branch.as_deref())
     }
 
     /// The extensions' open pages put on the theme now in force, without a reload.

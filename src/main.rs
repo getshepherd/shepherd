@@ -81,6 +81,7 @@ fn main() {
         // shown workspace's name being renamed in the sidebar) once the first snapshot is likely in (screenshots).
         // `devices`, or a device's key (`device:ios:<udid>`), opens the right panel's Device tab on it; `:tools` after it
         // opens its Tools panel, `:tools:overlay` the accessibility overlay too, `:text-size` the rail's Text size menu.
+        // `extension:<name>` opens that extension's page in the right panel.
         if let Ok(which) = std::env::var("SHEPHERD_PANEL") {
             // `review:timeline` opens the review panel on its Timeline tab, `review:menu` with its "…" menu open
             let review = which.strip_prefix("review").map(|tab| tab.trim_start_matches(':').to_string());
@@ -109,6 +110,7 @@ fn main() {
                         }
                         (None, None, tab) if tab.starts_with("browser:") => shell.open_blank_tab(Some(tab["browser:".len()..].to_string()), window, cx),
                         (None, None, "diffs") => shell.toggle_diff(window, cx),
+                        (None, None, ext) if ext.starts_with("extension:") => shell.add_extension_surface(&ext["extension:".len()..], window, cx),
                         (None, None, files) if files.starts_with("file") => shell.show_files(files, window, cx),
                         (None, None, "usage") => shell.open_usage_menu(window, cx),
                         (None, None, "projects") => shell.open_project_menu(cx),

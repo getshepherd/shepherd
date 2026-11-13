@@ -14,6 +14,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 /// An extension's sidebar entry id starts with this; a page added in Settings has a hex id.
 pub const PAGE_PREFIX: &str = "ext:";
+/// Its page in a workspace's right panel: `ext-panel:<workspace id>:<name>`, a page of each workspace's own.
+pub const PANEL_PREFIX: &str = "ext-panel:";
 /// How often the folder is scanned, the servers pinged and the `serve`s looked after.
 const EVERY: Duration = Duration::from_secs(2);
 /// A `serve` that exits before running this long counts as a crash in a row.
@@ -117,10 +119,21 @@ pub fn entries(cx: &App) -> Vec<WebEntry> {
     cx.try_global::<Extensions>().map(|e| e.0.iter().map(Extension::entry).collect()).unwrap_or_default()
 }
 
-/// The extension whose page has sidebar id `id`.
+/// The extension whose page has id `id`: its sidebar entry's, or a right panel tab's.
 pub fn by_page<'a>(cx: &'a App, id: &str) -> Option<&'a Extension> {
-    let name = id.strip_prefix(PAGE_PREFIX)?;
+    let name = id.strip_prefix(PAGE_PREFIX).or_else(|| Some(panel_of(id)?.1))?;
     cx.try_global::<Extensions>()?.0.iter().find(|e| e.name == name)
+}
+
+/// The id of `name`'s page in `workspace`'s right panel.
+pub fn panel_page(workspace: &str, name: &str) -> String {
+    format!("{PANEL_PREFIX}{workspace}:{name}")
+}
+
+/// A right panel page id's workspace and extension name. A name has no `:` (it is a folder's and a binary's), a
+/// workspace id may.
+pub fn panel_of(id: &str) -> Option<(&str, &str)> {
+    id.strip_prefix(PANEL_PREFIX)?.rsplit_once(':')
 }
 
 /// Whether its server answers `/_paddock/ping` with its token. Blocking, a second at most.
@@ -529,17 +542,78 @@ pub fn theme_script(theme: &Theme, origin: &str) -> String {
     )
 }
 
-/// The script that tells a page of the extension at `origin` what Shepherd shows: `window.shepherd`, and a `shepherd`
-/// event on `window` with the same as its `detail`. `dir` is the folder of the pane shown last (none when no pane is),
-/// what a page that lists something per project goes to. Sent once it loads and each time it is shown.
-pub fn state_script(origin: &str, dir: Option<&str>) -> String {
-    let (state, origin) = (serde_json::json!({ "dir": dir }), serde_json::Value::from(origin));
+/// What a page is told about the workspace it is for (paddock's README, "For Shepherd"): `dir`, the folder of its
+/// focused pane; `workspace`, its id and label; `repo`, git's `--show-toplevel` and `--git-common-dir` of its checkout;
+/// `branch`, none for a detached HEAD.
+pub fn context(dir: Option<&str>, workspace: Option<(&str, &str)>, repo: Option<(&str, &str)>, branch: Option<&str>) -> serde_json::Value {
+    use serde_json::json;
+    let project = repo.map(|(top, common)| {
+        // the main checkout holds the common `.git`; a bare repo is its own
+        let root = common.strip_suffix("/.git").unwrap_or(common);
+        (top, root, common)
+    });
+    json!({
+        "dir": dir,
+        "workspace": workspace.map(|(id, label)| json!({ "id": id, "label": label })),
+        "project": project.map(|(_, root, key)| json!({ "root": root, "key": key })),
+        "worktree": project.map(|(top, root, _)| json!({ "path": top, "branch": branch, "linked": top != root })),
+    })
+}
+
+/// The script that tells a page of the extension at `origin` what it is for: `window.shepherd`, and a `shepherd` event
+/// on `window` with the same as its `detail` (`context`).
+pub fn state_script(origin: &str, state: &serde_json::Value) -> String {
+    let origin = serde_json::Value::from(origin);
     format!("location.origin === {origin} && (window.shepherd = {state}, dispatchEvent(new CustomEvent('shepherd', {{ detail: window.shepherd }})));")
+}
+
+/// The skills of the extensions in `root` that have one, by name: what `<binary> skill` prints, empty for none.
+/// Blocking: each binary is run.
+pub fn skills(root: &Path) -> Vec<(String, String)> {
+    scan(root)
+        .into_iter()
+        .filter_map(|ext| {
+            let out = crate::process::command(&ext.binary).arg("skill").stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+            let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            (out.status.success() && !text.is_empty()).then_some((ext.name, text))
+        })
+        .collect()
+}
+
+/// A skill's `description` from its front matter, else its first line.
+pub fn skill_description(skill: &str) -> &str {
+    let front = skill.strip_prefix("---").and_then(|s| s.split("\n---").next()).unwrap_or_default();
+    front.lines().find_map(|l| l.strip_prefix("description:")).map(str::trim).unwrap_or_else(|| skill.lines().next().unwrap_or_default())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panel_pages_name_their_workspace_and_extension() {
+        let id = panel_page("w1:x", "prs");
+        assert_eq!(panel_of(&id), Some(("w1:x", "prs")));
+        assert_eq!(panel_of("ext:prs"), None);
+    }
+
+    #[test]
+    fn the_context_names_the_project_and_the_worktree() {
+        let linked = context(Some("/w/fix/src"), Some(("w1", "fix")), Some(("/w/fix", "/src/app/.git")), Some("fix"));
+        assert_eq!(linked["project"], serde_json::json!({ "root": "/src/app", "key": "/src/app/.git" }));
+        assert_eq!(linked["worktree"], serde_json::json!({ "path": "/w/fix", "branch": "fix", "linked": true }));
+        assert_eq!(linked["workspace"]["label"], "fix");
+        let main = context(Some("/src/app"), Some(("w2", "app")), Some(("/src/app", "/src/app/.git")), None);
+        assert_eq!(main["worktree"], serde_json::json!({ "path": "/src/app", "branch": null, "linked": false }));
+        let none = context(None, None, None, None);
+        assert!(none["project"].is_null() && none["worktree"].is_null() && none["dir"].is_null());
+    }
+
+    #[test]
+    fn a_skill_is_described_by_its_front_matter() {
+        assert_eq!(skill_description("---\nname: prs\ndescription: PRs of a task. Use it.\n---\n\n# prs"), "PRs of a task. Use it.");
+        assert_eq!(skill_description("Just text\nmore"), "Just text");
+    }
 
     #[test]
     fn repos_are_read_from_names_and_urls() {
@@ -684,7 +758,7 @@ mod tests {
         assert!(script.contains("\"--shell\":\"#0d1017\""));
         assert!(script.contains("colorScheme = 'dark'"));
         assert!(script.contains("!== \"http://127.0.0.1:5000\""));
-        let state = state_script("http://127.0.0.1:5000", Some("/a b"));
+        let state = state_script("http://127.0.0.1:5000", &serde_json::json!({ "dir": "/a b" }));
         assert!(state.starts_with("location.origin === \"http://127.0.0.1:5000\" && (window.shepherd = {\"dir\":\"/a b\"}"), "{state}");
     }
 }

@@ -17,6 +17,8 @@ pub enum Surface {
     Files,
     /// A file opened from the tree, by its tab's id, as Zeron opens one in its own tab.
     File(String),
+    /// An extension's page, by its id (`extensions::panel_page`): the workspace's own, told about it.
+    Extension(String),
 }
 
 const PULL_REQUEST_KEY: &str = "pull-request";
@@ -38,7 +40,7 @@ impl Surface {
     /// What the strip knows the tab by.
     pub fn key(&self) -> &str {
         match self {
-            Surface::Browser(id) | Surface::Diff(id) | Surface::Device(id) | Surface::File(id) => id,
+            Surface::Browser(id) | Surface::Diff(id) | Surface::Device(id) | Surface::File(id) | Surface::Extension(id) => id,
             Surface::PullRequest => PULL_REQUEST_KEY,
             Surface::Files => FILES_KEY,
         }
@@ -51,6 +53,7 @@ impl Surface {
             id if id.starts_with(FILE_PREFIX) => Surface::File(id.to_string()),
             id if id.starts_with(DIFF_PREFIX) => Surface::Diff(id.to_string()),
             id if id.starts_with(crate::device::KEY) => Surface::Device(id.to_string()),
+            id if id.starts_with(crate::extensions::PANEL_PREFIX) => Surface::Extension(id.to_string()),
             id => Surface::Browser(id.to_string()),
         }
     }
@@ -152,7 +155,12 @@ impl PanelState {
 
     /// Closes the browser tabs not in `live`.
     pub fn retain_browsers(&mut self, live: &[&str]) {
-        let gone = |s: &&Surface| matches!(s, Surface::Browser(id) if !live.contains(&id.as_str()));
+        self.retain_where(|s| !matches!(s, Surface::Browser(id) if !live.contains(&id.as_str())));
+    }
+
+    /// Closes the tabs `keep` says no to.
+    pub fn retain_where(&mut self, keep: impl Fn(&Surface) -> bool) {
+        let gone = |s: &&Surface| !keep(s);
         let gone: Vec<Surface> = self.tabs.iter().filter(gone).cloned().collect();
         gone.iter().for_each(|s| self.close(s));
     }
@@ -165,22 +173,25 @@ pub fn page_takes_keyboard(sidebar_page: bool, focus_in_panel: bool, popup: bool
 }
 
 /// What the picker and the `+` list.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Offer {
     Browser,
     Diffs,
     Files,
     PullRequest,
     Device,
+    /// An installed extension's page, by its name.
+    Extension(String),
 }
 
 /// A page needs a window that can embed it; a diff and the files, a repo; a pull request, a remote to ask. Devices are
-/// always offered: their tab says what the machine lacks.
-pub fn offered(has_remote: bool, in_repo: bool, embeds_pages: bool) -> Vec<Offer> {
+/// always offered: their tab says what the machine lacks. The `extensions` installed come last, pages as well.
+pub fn offered(has_remote: bool, in_repo: bool, embeds_pages: bool, extensions: &[String]) -> Vec<Offer> {
     let browser = embeds_pages.then_some(Offer::Browser);
     let repo = in_repo.then_some([Offer::Diffs, Offer::Files]).into_iter().flatten();
     let request = has_remote.then_some(Offer::PullRequest);
-    browser.into_iter().chain(repo).chain(request).chain([Offer::Device]).collect()
+    let pages = extensions.iter().filter(|_| embeds_pages).map(|name| Offer::Extension(name.clone()));
+    browser.into_iter().chain(repo).chain(request).chain([Offer::Device]).chain(pages).collect()
 }
 
 /// Whether the panel slides, between two renders' (workspace shown, its panel open): it does when opened or closed in
