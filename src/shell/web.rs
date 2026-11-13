@@ -184,9 +184,13 @@ impl Shell {
         listed(&sidebar_entries(cx), self.backend.kind(), place).into_iter().cloned().collect()
     }
 
-    /// Fetches the favicons of the entries listed that have none yet, or whose URL changed.
+    /// Fetches the favicons of the entries listed that have none yet, or whose URL changed; and every extension's,
+    /// the right panel's too, which its `+` and tabs show.
     fn fetch_favicons(&mut self, cx: &mut Context<Self>) {
-        for entry in self.listed_entries(cx) {
+        let mut entries = self.listed_entries(cx);
+        let more: Vec<WebEntry> = crate::extensions::all_entries(cx).into_iter().filter(|e| !entries.iter().any(|l| l.id == e.id)).collect();
+        entries.extend(more);
+        for entry in entries {
             // a page opened on a machine fetches its icon through its forward, once that is up
             if entry.open_from == OpenFrom::Machine && crate::herdr::shown_machine().is_some() {
                 continue;

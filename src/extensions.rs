@@ -128,6 +128,11 @@ impl Extension {
     }
 }
 
+/// Every extension's page as a sidebar entry, wherever it shows: what its icon is fetched by.
+pub fn all_entries(cx: &App) -> Vec<WebEntry> {
+    cx.try_global::<Extensions>().map(|e| e.0.iter().map(Extension::entry).collect()).unwrap_or_default()
+}
+
 /// The sidebar entries of the extensions that show there.
 pub fn entries(cx: &App) -> Vec<WebEntry> {
     cx.try_global::<Extensions>().map(|e| e.0.iter().filter(|e| e.in_sidebar()).map(Extension::entry).collect()).unwrap_or_default()

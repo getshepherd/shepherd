@@ -131,6 +131,22 @@ fn offer_row(offer: &Offer, cx: &App) -> (&'static str, SharedString) {
 }
 
 impl Shell {
+    /// Extension `name`'s favicon, once fetched: its tab's, its `+` row's and its picker card's icon.
+    fn extension_icon(&self, name: &str) -> Option<std::sync::Arc<gpui::Image>> {
+        match self.pages.favicons.get(&(format!("{}{name}", crate::extensions::PAGE_PREFIX), None)) {
+            Some((_, super::web::Favicon::Image(image))) => Some(image.clone()),
+            _ => None,
+        }
+    }
+
+    /// An offer's icon `size` wide: an extension's own favicon, else the row's glyph in `color`.
+    fn offer_mark(&self, offer: &Offer, glyph: &'static str, size: f32, color: gpui::Hsla) -> AnyElement {
+        match offer {
+            Offer::Extension(name) if let Some(image) = self.extension_icon(name) => gpui::img(image).size(px(size)).rounded(px(3.)).flex_none().into_any_element(),
+            _ => gpui::svg().path(glyph).size(px(size)).flex_none().text_color(color).into_any_element(),
+        }
+    }
+
     /// The shown workspace's panel.
     pub(super) fn panel(&self) -> Option<&PanelState> {
         self.right.panels.get(&self.shown_tab()?.workspace_id)
@@ -369,11 +385,7 @@ impl Shell {
                 Surface::Files => ("Files".to_string(), mark(FILES_ICON)),
                 Surface::Extension(id) => {
                     let ext = crate::extensions::by_page(cx, id);
-                    // the sidebar fetched its icon
-                    let icon = ext.and_then(|e| match self.pages.favicons.get(&(e.entry().id, None)) {
-                        Some((_, super::web::Favicon::Image(image))) => Some(image.clone()),
-                        _ => None,
-                    });
+                    let icon = ext.and_then(|e| self.extension_icon(&e.name));
                     (ext.map_or_else(|| "Extension".to_string(), |e| e.title()), icon.map_or_else(|| mark(EXTENSION_ICON), Leading::Image))
                 }
                 Surface::File(id) => match self.right.file_tabs.get(id) {
@@ -610,7 +622,7 @@ impl Shell {
                 .gap(px(10.))
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg).border_color(hover_border))
-                .child(gpui::svg().path(icon).size(px(15.)).flex_none().text_color(theme.text_muted))
+                .child(self.offer_mark(&offer, icon, 15., theme.text_muted))
                 .child(div().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM).text_color(theme.text).child(title))
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.pick_surface(offer.clone(), window, cx)))
         });
@@ -634,7 +646,7 @@ impl Shell {
             row(theme, false, SharedString::from(format!("right-plus-{title}")))
                 .h(px(28.))
                 .rounded(px(6.))
-                .child(menu_mark(icon, theme.text_muted))
+                .child(self.offer_mark(&offer, icon, 14., theme.text_muted))
                 .child(title)
                 .on_pick(
                     at,
