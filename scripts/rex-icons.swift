@@ -13,6 +13,7 @@ import Foundation
 let taken = [
     "btop": "btop", "d2": "d2", "fx": "fx", "gnu": "gnu", "kakoune": "kakoune",
     "moon": "moon", "pixi": "pixi", "proto": "proto", "yazi": "yazi",
+    "nano": "nano", "micro": "micro", "delta": "delta", "tilt": "tilt", "llama-cpp": "llama-cpp",
 ]
 
 let app = ProcessInfo.processInfo.environment["REX_APP"] ?? "/Applications/Rex Beta.app"

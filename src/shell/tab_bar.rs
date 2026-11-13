@@ -67,8 +67,12 @@ fn program_mark(name: &str, theme: &Theme) -> Option<Mark> {
         "vim" | "vi" => ("icons/vim-mark.svg", brand(0x019733, WHITE)),
         "hx" | "helix" => ("icons/helix-mark.svg", brand(0x281733, WHITE)),
         "kak" | "kakoune" => ("icons/kakoune-mark.svg", brand(BLACK, WHITE)),
+        "emacs" => ("icons/emacs-mark.svg", brand(0x7F5AB6, WHITE)),
+        "nano" => ("icons/nano-mark.svg", brand(BLACK, WHITE)),
+        "micro" => ("icons/micro-mark.svg", brand(BLACK, WHITE)),
         // version control and forges
         "git" | "lazygit" | "gitui" | "tig" => ("icons/git-mark.svg", brand(0xF03C2E, WHITE)),
+        "delta" => ("icons/delta-mark.svg", brand(BLACK, WHITE)),
         "gh" => ("icons/github-mark.svg", brand(BLACK, WHITE)),
         "glab" => ("icons/gitlab-mark.svg", brand(0xFC6D26, WHITE)),
         // languages and their tools
@@ -85,6 +89,7 @@ fn program_mark(name: &str, theme: &Theme) -> Option<Mark> {
         "elixir" | "iex" | "mix" => ("icons/elixir-mark.svg", brand(0x8847B9, WHITE)),
         "lua" | "luajit" => ("icons/lua-mark.svg", brand(0x000080, WHITE)),
         "zig" => ("icons/zig-mark.svg", brand(0xF7A41D, INK)),
+        "julia" => ("icons/julia-mark.svg", brand(0x9558B2, WHITE)),
         "java" | "javac" => ("icons/java-mark.svg", brand(BLACK, WHITE)),
         "dotnet" => ("icons/dotnet-mark.svg", brand(0x512BD4, WHITE)),
         "uv" | "uvx" => ("icons/uv-mark.svg", brand(0xDE5FE9, WHITE)),
@@ -99,6 +104,7 @@ fn program_mark(name: &str, theme: &Theme) -> Option<Mark> {
         "make" | "gmake" => ("icons/gnu-mark.svg", brand(0xA42E2B, WHITE)),
         "task" => ("icons/task-mark.svg", brand(0x29BEB0, WHITE)),
         "moon" => ("icons/moon-mark.svg", brand(0x6F53F3, WHITE)),
+        "tilt" => ("icons/tilt-mark.svg", brand(BLACK, WHITE)),
         "nextflow" => ("icons/nextflow-mark.svg", brand(0x0DC09D, WHITE)),
         // containers and infrastructure
         "docker" | "docker-compose" | "lazydocker" => ("icons/docker-mark.svg", brand(0x2496ED, WHITE)),
@@ -111,6 +117,7 @@ fn program_mark(name: &str, theme: &Theme) -> Option<Mark> {
         "nomad" => ("icons/nomad-mark.svg", brand(0x00CA8E, INK)),
         "vagrant" => ("icons/vagrant-mark.svg", brand(0x1868F2, WHITE)),
         "nix" | "nix-shell" => ("icons/nix-mark.svg", brand(0x5277C3, WHITE)),
+        "caddy" => ("icons/caddy-mark.svg", brand(0x1F88C0, WHITE)),
         "nginx" => ("icons/nginx-mark.svg", brand(0x009639, WHITE)),
         "cloudflared" => ("icons/cloudflare-mark.svg", brand(0xF38020, WHITE)),
         "tailscale" => ("icons/tailscale-mark.svg", brand(BLACK, WHITE)),
@@ -121,8 +128,10 @@ fn program_mark(name: &str, theme: &Theme) -> Option<Mark> {
         "sqlite3" => ("icons/sqlite-mark.svg", brand(0x003B57, WHITE)),
         "redis-cli" | "redis-server" => ("icons/redis-mark.svg", brand(0xFF4438, WHITE)),
         "mongosh" | "mongod" => ("icons/mongodb-mark.svg", brand(0x47A248, WHITE)),
+        "duckdb" => ("icons/duckdb-mark.svg", brand(0xFFF000, INK)),
         // the rest
         "ollama" => ("icons/ollama-mark.svg", brand(BLACK, WHITE)),
+        llama if llama.starts_with("llama-") => ("icons/llama-cpp-mark.svg", brand(BLACK, WHITE)),
         "tmux" => ("icons/tmux-mark.svg", brand(0x1BB91F, WHITE)),
         "ffmpeg" | "ffprobe" => ("icons/ffmpeg-mark.svg", brand(0x007808, WHITE)),
         "rclone" => ("icons/rclone-mark.svg", brand(0x3F79AD, WHITE)),

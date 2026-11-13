@@ -12,9 +12,10 @@ Solar icon set, Linear style (assets/solar-linear.json)
 Lucide (assets/icons/lucide-*.svg)
   From https://lucide.dev (lucide-static 0.460.0), ISC license.
 
-Simple Icons (assets/icons/<name>-mark.svg for: bat, bazel, bun, cloudflare, cmake, consul, dart, deno, docker, dotnet, elixir, ffmpeg, flutter, git, github, gitlab, go, helix, htop, java, kubernetes, lua, mongodb, mysql, neovim, nextflow, nginx, nix, node, nomad, ollama, packer, php, podman, postgresql, python, rclone, redis, ruby, rust, sqlite, supabase, swift, tailscale, task, terraform, tmux, turbo, uv, vagrant, vault, vim, zig)
+Simple Icons (assets/icons/<name>-mark.svg for: bat, bazel, bun, caddy, cloudflare, cmake, consul, dart, deno, docker, dotnet, duckdb, elixir, emacs, ffmpeg, flutter, git, github, gitlab, go, helix, htop, java, julia, kubernetes, lua, mongodb, mysql, neovim, nextflow, nginx, nix, node, nomad, ollama, packer, php, podman, postgresql, python, rclone, redis, ruby, rust, sqlite, supabase, swift, tailscale, task, terraform, tmux, turbo, uv, vagrant, vault, vim, zig)
   From https://simpleicons.org (simple-icons 16.36.0), with their <title> removed. CC0 1.0, except:
     deno-mark: MIT, https://github.com/denoland/docs/blob/5dee713844c7447f80acd4093caa9d350d80bf36/static/img/logo.svg
+    emacs-mark: GPL-2.0-or-later, https://git.savannah.gnu.org/cgit/emacs.git/tree/etc/images/icons/hicolor/scalable/apps/emacs.svg
     git-mark: CC-BY-3.0, https://git-scm.com/community/logos
     java-mark: BSD-3-Clause, https://hg.openjdk.java.net/duke/duke/file/ca00f100dafc/vector/Agent.svg
     neovim-mark: CC-BY-SA-3.0, https://neovim.io
@@ -25,7 +26,7 @@ Simple Icons (assets/icons/<name>-mark.svg for: bat, bazel, bun, cloudflare, cma
     zig-mark: CC-BY-SA-4.0, https://github.com/ziglang/logo/blob/6446ba8e37a0651da720d8869e1ce9264fa0c0b9/zig-mark.svg
   The marks are their projects' trademarks; they name the program running in a tab.
 
-Rex (assets/icons/<name>-mark.svg for: btop, d2, fx, gnu, kakoune, moon, pixi, proto, yazi)
+Rex (assets/icons/<name>-mark.svg for: btop, d2, delta, fx, gnu, kakoune, llama-cpp, micro, moon, nano, pixi, proto, tilt, yazi)
   Logos of those open-source projects as drawn in the icon catalog of Rex Beta.app (Superlogical), read out as SVG,
   with their viewBoxes made square (scripts/rex-icons.swift). They name the program running in a tab.
 

@@ -192,6 +192,15 @@ impl gpui::AssetSource for Assets {
             "packer-mark",
             "nomad-mark",
             "bat-mark",
+            "emacs-mark",
+            "nano-mark",
+            "micro-mark",
+            "julia-mark",
+            "duckdb-mark",
+            "caddy-mark",
+            "delta-mark",
+            "tilt-mark",
+            "llama-cpp-mark",
         ))
     }
 
