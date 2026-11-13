@@ -322,6 +322,8 @@ pub(super) struct Changes {
     tree: bool,
     /// The tree view's closed folders: their files are left out.
     closed_dirs: std::collections::HashSet<String>,
+    /// The folders met so far: one met first comes closed when its files are.
+    seen_dirs: std::collections::HashSet<String>,
     /// Image files' pictures, by path, for the parse shown.
     images: HashMap<String, ImagePreview>,
     /// Comparison ref for [`DiffScope::Branch`]: preset to the repo's default branch once the branch list lands.
@@ -400,6 +402,7 @@ impl Changes {
             tree: settings.diff_tree,
             images: HashMap::new(),
             closed_dirs: Default::default(),
+            seen_dirs: Default::default(),
             base_ref: None,
             branches: Vec::new(),
             branches_for: None,
@@ -729,6 +732,7 @@ impl Changes {
             let unread = self.pr.as_ref().is_some_and(|pr| small && !pr.viewed.contains(&file.path));
             self.folds.entry(file.path.clone()).or_insert(FileFold { collapsed: !commented && !unread, ..FileFold::default() });
         }
+        self.close_shut_dirs(&files, false);
         let (rows, ranges) = flatten_rows(
             &files,
             &staged,
@@ -989,8 +993,25 @@ impl Changes {
         self.tree = !self.tree;
         let tree = self.tree;
         save_from_sidebar(cx, |s| s.diff_tree = tree);
+        // the tree opens as shut as the files are
+        if let Some(files) = self.parsed.as_ref().map(|p| p.files.clone()).filter(|_| tree) {
+            self.closed_dirs.clear();
+            self.close_shut_dirs(&files, true);
+        }
         self.cursor = None;
         self.reflatten(cx);
+    }
+
+    /// Closes the folders whose files are all shut: every one, or (`all` false) only those not met before.
+    fn close_shut_dirs(&mut self, files: &[FileDiff], all: bool) {
+        let dirs: std::collections::BTreeSet<&str> = files.iter().map(|f| directory_of(&f.path)).filter(|d| !d.is_empty()).collect();
+        for dir in dirs {
+            let new = self.seen_dirs.insert(dir.to_string());
+            let shut = files.iter().filter(|f| directory_of(&f.path) == dir).all(|f| self.folds.get(&f.path).is_some_and(|fold| fold.collapsed));
+            if (all || new) && shut {
+                self.closed_dirs.insert(dir.to_string());
+            }
+        }
     }
 
     /// A folder row's click: the folder closes, its files' rows gone, or opens again.
@@ -2000,8 +2021,11 @@ fn code_text_viewport(text: String, runs: Vec<gpui::TextRun>, theme: &Theme, pad
     if wrapped {
         return viewport.into_any_element();
     }
-    // scrolled off its start, the code slides under the line numbers: a shadow along their edge says so
-    let scrolled = f32::from(scroll.handle.offset().x) < 0.;
+    // scrolled off its start, the code slides under the line numbers: a shadow along their edge says so, deepening over
+    // the first few pixels; none where the lines fit and only the right padding scrolls
+    let (offset, max) = (-f32::from(scroll.handle.offset().x), f32::from(scroll.handle.max_offset().x));
+    let depth = if max > CODE_PADDING_RIGHT { (offset / 32.).clamp(0., 1.) } else { 0. };
+    let scrolled = depth > 0.;
     let mut viewport = viewport.id(scroll.id).overflow_x_scroll().track_scroll(&scroll.handle);
     // Without this GPUI maps a vertical-only wheel delta onto x for an x-only scroller, starving the virtualized list
     // underneath.
@@ -2009,9 +2033,9 @@ fn code_text_viewport(text: String, runs: Vec<gpui::TextRun>, theme: &Theme, pad
     if !scrolled {
         return viewport.into_any_element();
     }
-    let shadow = div().absolute().top_0().bottom_0().left_0().w(px(10.)).bg(gpui::linear_gradient(
+    let shadow = div().absolute().top_0().bottom_0().left_0().w(px(16.)).bg(gpui::linear_gradient(
         90.,
-        gpui::linear_color_stop(gpui::black().opacity(0.35), 0.),
+        gpui::linear_color_stop(gpui::black().opacity(0.14 * depth), 0.),
         gpui::linear_color_stop(gpui::black().opacity(0.), 1.),
     ));
     div().relative().flex_1().min_w_0().flex().child(viewport).child(shadow).into_any_element()
