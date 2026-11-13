@@ -32,6 +32,8 @@ pub struct Extension {
     pub token: String,
     /// `login` (the system runs it) or `shepherd` (Shepherd does, while it is open).
     pub start: String,
+    /// Where its page shows, as it says (paddock's `App.Show`): `sidebar`, `panel`; none is both.
+    pub show: Vec<String>,
     pub binary: PathBuf,
     /// Its server answered the last ping.
     pub alive: bool,
@@ -63,6 +65,8 @@ struct State {
     token: String,
     #[serde(default)]
     start: String,
+    #[serde(default)]
+    show: Vec<String>,
 }
 
 pub fn root() -> PathBuf {
@@ -81,7 +85,7 @@ pub fn scan(root: &Path) -> Vec<Extension> {
             // paddock's default when it is unset
             let start = if state.start.is_empty() { "login".into() } else { state.start };
             let source = std::fs::read(dir.join(SOURCE)).ok().and_then(|b| serde_json::from_slice(&b).ok());
-            binary.is_file().then_some(Extension { name, description: state.description, port: state.port, token: state.token, start, binary, alive: false, source })
+            binary.is_file().then_some(Extension { name, description: state.description, port: state.port, token: state.token, start, show: state.show, binary, alive: false, source })
         })
         .collect();
     found.sort_by(|a, b| a.name.cmp(&b.name));
@@ -95,6 +99,16 @@ impl Extension {
 
     pub fn url(&self) -> String {
         format!("{}/?token={}", self.origin(), self.token)
+    }
+
+    /// Whether it is listed in the sidebar, its page in place of the panes.
+    pub fn in_sidebar(&self) -> bool {
+        self.show.is_empty() || self.show.iter().any(|s| s == "sidebar")
+    }
+
+    /// Whether it is offered in a workspace's right panel, its page beside the panes.
+    pub fn in_panel(&self) -> bool {
+        self.show.is_empty() || self.show.iter().any(|s| s == "panel")
     }
 
     pub fn runs_with_shepherd(&self) -> bool {
@@ -114,9 +128,9 @@ impl Extension {
     }
 }
 
-/// The extensions' sidebar entries.
+/// The sidebar entries of the extensions that show there.
 pub fn entries(cx: &App) -> Vec<WebEntry> {
-    cx.try_global::<Extensions>().map(|e| e.0.iter().map(Extension::entry).collect()).unwrap_or_default()
+    cx.try_global::<Extensions>().map(|e| e.0.iter().filter(|e| e.in_sidebar()).map(Extension::entry).collect()).unwrap_or_default()
 }
 
 /// The extension whose page has id `id`: its sidebar entry's, or a right panel tab's.
@@ -688,7 +702,7 @@ mod tests {
                 std::fs::write(dir.join(if cfg!(windows) { format!("{name}.exe") } else { name.into() }), "").unwrap();
             }
         };
-        make("demo", r#"{"name":"demo","description":"A demo","port":5000,"token":"t","start":"shepherd"}"#, true);
+        make("demo", r#"{"name":"demo","description":"A demo","port":5000,"token":"t","start":"shepherd","show":["panel"]}"#, true);
         make("plain", r#"{"port":5001,"token":"u"}"#, true);
         make("half", r#"{"port":5002,"token":"v"}"#, false);
         make("broken", "{", true);
@@ -698,6 +712,8 @@ mod tests {
         assert!(found[0].runs_with_shepherd());
         assert_eq!(found[1].start, "login");
         assert_eq!(found[0].url(), "http://127.0.0.1:5000/?token=t");
+        assert!(found[0].in_panel() && !found[0].in_sidebar(), "where it says it shows");
+        assert!(found[1].in_panel() && found[1].in_sidebar(), "both when it doesn't say");
     }
 
     #[cfg(unix)]

@@ -418,7 +418,10 @@ impl Shell {
 
     /// The panel and its resize edge.
     pub(super) fn render_right_panel(&mut self, theme: &Theme, shown: &ShownReview, has_remote: bool, window: &mut Window, cx: &mut Context<Self>) -> [AnyElement; 2] {
-        let extensions: Vec<String> = cx.try_global::<crate::extensions::Extensions>().map(|e| e.0.iter().map(|e| e.name.clone()).collect()).unwrap_or_default();
+        let extensions: Vec<String> = cx
+            .try_global::<crate::extensions::Extensions>()
+            .map(|e| e.0.iter().filter(|e| e.in_panel()).map(|e| e.name.clone()).collect())
+            .unwrap_or_default();
         self.right.offers = offered(has_remote, shown.key.is_some(), super::web::embeds_pages(window), &extensions);
         let width = self.right_panel_drawn(window);
         let now = width * self.right_panel_slide(window);
