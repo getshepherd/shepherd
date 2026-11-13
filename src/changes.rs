@@ -987,23 +987,30 @@ pub fn body_rows(file_ix: u32, file: &FileDiff, comments: &[ReviewComment], draf
 }
 
 /// Flatten all files into rows + each file's row span (header at `range.start`, body rows after it). `collapsed(ix)`
-/// folds a file to just its header. `comments` is the whole staged set; each file takes its own path's slice.
+/// folds a file to just its header. `tree` puts a folder's row over its files, the closed folders' files left out
+/// (their spans empty). `comments` is the whole staged set; each file takes its own path's slice.
 pub fn flatten_rows(
     files: &[FileDiff],
     comments: &[ReviewComment],
     draft: Option<(&str, CommentSide, u32)>,
     mode: DiffMode,
-    tree: bool,
+    tree: Option<&std::collections::HashSet<String>>,
     mut collapsed: impl FnMut(usize) -> bool,
 ) -> (Vec<DiffRow>, Vec<std::ops::Range<usize>>) {
     let mut rows = Vec::new();
     let mut ranges = Vec::with_capacity(files.len());
     for (ix, file) in files.iter().enumerate() {
         // a folder's row sits between two files' spans, in neither
-        if tree && !directory_of(&file.path).is_empty() && (ix == 0 || directory_of(&files[ix - 1].path) != directory_of(&file.path)) {
+        let dir = directory_of(&file.path);
+        if tree.is_some() && !dir.is_empty() && (ix == 0 || directory_of(&files[ix - 1].path) != dir) {
             rows.push(DiffRow::Directory { file: ix as u32 });
         }
         let start = rows.len();
+        // a closed folder's files have no rows: an empty span where they'd start
+        if tree.is_some_and(|closed| closed.contains(dir)) {
+            ranges.push(start..start);
+            continue;
+        }
         rows.push(DiffRow::FileHeader { file: ix as u32 });
         if !collapsed(ix) {
             let file_comments: Vec<ReviewComment> = comments.iter().filter(|comment| comment.path == file.path).cloned().collect();
@@ -1805,7 +1812,7 @@ rename to new_name.rs
     #[test]
     fn rows_flatten_to_line_granularity() {
         let files = parse_patch(PATCH);
-        let (rows, ranges) = flatten_rows(&files, &[], None, DiffMode::Unified, false, |_| false);
+        let (rows, ranges) = flatten_rows(&files, &[], None, DiffMode::Unified, None, |_| false);
         assert_eq!(ranges.len(), files.len());
         // Every file's span starts with its header…
         for (ix, range) in ranges.iter().enumerate() {
@@ -1824,7 +1831,7 @@ rename to new_name.rs
 
         // The tree view puts a folder's row before its first file, outside every span.
         let tree_files: Vec<FileDiff> = ["a.rs", "src/b.rs", "src/c.rs", "src/ui/d.rs"].map(|p| FileDiff::new(p.into(), None)).into();
-        let (rows, ranges) = flatten_rows(&tree_files, &[], None, DiffMode::Unified, true, |_| true);
+        let (rows, ranges) = flatten_rows(&tree_files, &[], None, DiffMode::Unified, Some(&Default::default()), |_| true);
         assert_eq!(
             rows,
             [0, 1, 2, 3].map(|f| DiffRow::FileHeader { file: f }).iter().enumerate().flat_map(|(ix, header)| match ix {
@@ -1833,9 +1840,14 @@ rename to new_name.rs
             }).collect::<Vec<_>>()
         );
         assert_eq!(rows[ranges[1].start], DiffRow::FileHeader { file: 1 });
+        // A closed folder keeps its row; its files have none.
+        let closed = ["src".to_string()].into();
+        let (rows, ranges) = flatten_rows(&tree_files, &[], None, DiffMode::Unified, Some(&closed), |_| true);
+        assert_eq!(rows, [DiffRow::FileHeader { file: 0 }, DiffRow::Directory { file: 1 }, DiffRow::Directory { file: 3 }, DiffRow::FileHeader { file: 3 }]);
+        assert!(ranges[1].is_empty() && ranges[2].is_empty());
 
         // A collapsed file contributes its header row only.
-        let (rows, ranges) = flatten_rows(&files, &[], None, DiffMode::Unified, false, |ix| ix == 0);
+        let (rows, ranges) = flatten_rows(&files, &[], None, DiffMode::Unified, None, |ix| ix == 0);
         assert_eq!(ranges[0].len(), 1);
         assert_eq!(rows[ranges[1].start], DiffRow::FileHeader { file: 1 });
 
@@ -1995,7 +2007,7 @@ rename to new_name.rs
     #[test]
     fn split_flattening_pairs_rows_and_keeps_heights_analytic() {
         let files = parse_patch(PATCH);
-        let (rows, ranges) = flatten_rows(&files, &[], None, DiffMode::Split, false, |_| false);
+        let (rows, ranges) = flatten_rows(&files, &[], None, DiffMode::Split, None, |_| false);
         assert_eq!(ranges.len(), files.len());
         assert_eq!(ranges.last().unwrap().end, rows.len());
 

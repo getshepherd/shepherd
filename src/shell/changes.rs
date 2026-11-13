@@ -320,6 +320,8 @@ pub(super) struct Changes {
     wrap_lines: bool,
     /// Files in folder order under their folders' rows.
     tree: bool,
+    /// The tree view's closed folders: their files are left out.
+    closed_dirs: std::collections::HashSet<String>,
     /// Image files' pictures, by path, for the parse shown.
     images: HashMap<String, ImagePreview>,
     /// Comparison ref for [`DiffScope::Branch`]: preset to the repo's default branch once the branch list lands.
@@ -397,6 +399,7 @@ impl Changes {
             wrap_lines: settings.diff_wrap,
             tree: settings.diff_tree,
             images: HashMap::new(),
+            closed_dirs: Default::default(),
             base_ref: None,
             branches: Vec::new(),
             branches_for: None,
@@ -731,7 +734,7 @@ impl Changes {
             &staged,
             draft.as_ref().map(|(path, side, line)| (path.as_str(), *side, *line)),
             self.mode,
-            self.tree,
+            self.tree.then_some(&self.closed_dirs),
             |ix| self.folds.get(&files[ix].path).is_some_and(|fold| fold.collapsed),
         );
         self.comment_key = comment_state_key(&staged, draft.as_ref());
@@ -988,17 +991,13 @@ impl Changes {
         self.reflatten(cx);
     }
 
-    /// A folder row's click: its files all shut, or all open when they're all shut already.
+    /// A folder row's click: the folder closes, its files' rows gone, or opens again.
     fn toggle_directory(&mut self, file_ix: usize, cx: &mut Context<Self>) {
-        let Some(files) = self.parsed.as_ref().map(|p| p.files.clone()) else { return };
-        let Some(dir) = files.get(file_ix).map(|f| directory_of(&f.path)) else { return };
-        let group = files.iter().filter(|f| directory_of(&f.path) == dir);
-        let collapse = !group.clone().all(|f| self.folds.get(&f.path).is_some_and(|fold| fold.collapsed));
-        for file in group {
-            let fold = self.folds.entry(file.path.clone()).or_default();
-            fold.collapsed = collapse;
-            fold.toggled_at = None;
+        let Some(dir) = self.parsed.as_ref().and_then(|p| p.files.get(file_ix)).map(|f| directory_of(&f.path).to_string()) else { return };
+        if !self.closed_dirs.remove(&dir) {
+            self.closed_dirs.insert(dir);
         }
+        self.cursor = None;
         self.reflatten(cx);
     }
 
@@ -1046,7 +1045,7 @@ impl Changes {
             &staged,
             draft.as_ref().map(|(path, side, line)| (path.as_str(), *side, *line)),
             self.mode,
-            self.tree,
+            self.tree.then_some(&self.closed_dirs),
             |ix| self.folds.get(&files[ix].path).is_some_and(|fold| fold.collapsed),
         );
         self.list.reset_with_uniform_height(rows.len(), px(DIFF_LINE_HEIGHT));
@@ -1401,8 +1400,24 @@ impl Changes {
             DiffRow::Directory { file } => self.render_directory_row(file as usize, &files, &theme, cx),
             DiffRow::Image { .. } => {
                 let path = file_diff.path.clone();
+                let at = self.dir.clone().zip(self.diff.as_ref().map(|d| d.root.clone()));
                 let picture = match self.image_of(&path, cx) {
-                    Some(ImagePreview::Ready(image)) => gpui::img(image.clone()).max_w_full().max_h_full().object_fit(gpui::ObjectFit::Contain).into_any_element(),
+                    // a click opens it in the panes' image dialog, as the file's menu's Preview does
+                    Some(ImagePreview::Ready(image)) => {
+                        div()
+                            .id(("diff-image", ix))
+                            .size_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .child(gpui::img(image.clone()).max_w_full().max_h_full().object_fit(gpui::ObjectFit::Contain))
+                            .when_some(at, |el, (dir, root)| {
+                                let path = path.clone();
+                                el.on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(ChangesEvent::Preview { dir: dir.clone(), root: root.clone(), path: path.clone() })))
+                            })
+                            .into_any_element()
+                    }
                     Some(ImagePreview::Failed) => div().text_size(px(12.0)).text_color(theme.text_faint).child("Couldn't read this image").into_any_element(),
                     _ => empty(),
                 };
@@ -1513,7 +1528,7 @@ impl Changes {
     /// The tree view's folder row: its chevron folds all its files.
     fn render_directory_row(&mut self, file_ix: usize, files: &[FileDiff], theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let Some(dir) = files.get(file_ix).map(|f| directory_of(&f.path).to_string()) else { return gpui::Empty.into_any_element() };
-        let open = files.iter().filter(|f| directory_of(&f.path) == dir).any(|f| !self.folds.get(&f.path).is_some_and(|fold| fold.collapsed));
+        let open = !self.closed_dirs.contains(&dir);
         let hover_bg = theme.wash(0.05);
         div()
             .id(SharedString::from(format!("dir-hdr-{file_ix}")))
