@@ -2000,11 +2000,21 @@ fn code_text_viewport(text: String, runs: Vec<gpui::TextRun>, theme: &Theme, pad
     if wrapped {
         return viewport.into_any_element();
     }
+    // scrolled off its start, the code slides under the line numbers: a shadow along their edge says so
+    let scrolled = f32::from(scroll.handle.offset().x) < 0.;
     let mut viewport = viewport.id(scroll.id).overflow_x_scroll().track_scroll(&scroll.handle);
     // Without this GPUI maps a vertical-only wheel delta onto x for an x-only scroller, starving the virtualized list
     // underneath.
     viewport.style().restrict_scroll_to_axis = Some(true);
-    viewport.into_any_element()
+    if !scrolled {
+        return viewport.into_any_element();
+    }
+    let shadow = div().absolute().top_0().bottom_0().left_0().w(px(10.)).bg(gpui::linear_gradient(
+        90.,
+        gpui::linear_color_stop(gpui::black().opacity(0.35), 0.),
+        gpui::linear_color_stop(gpui::black().opacity(0.), 1.),
+    ));
+    div().relative().flex_1().min_w_0().flex().child(viewport).child(shadow).into_any_element()
 }
 
 /// What sets a line's row apart: its marker, the marker's and the numbers' color, its tint and accent bar.
