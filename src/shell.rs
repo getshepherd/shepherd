@@ -1125,6 +1125,19 @@ impl Shell {
         cx.notify();
     }
 
+    /// A click on a pane tells herdr too, as [`Self::navigate`] does: kept to the window, herdr's focused pane stayed
+    /// the old one, so the tab's top tile didn't move, and a key back to that pane changed nothing (it was focused
+    /// already), leaving the keys in the clicked one.
+    fn click_pane(&mut self, tab_id: &str, pane_id: &str, cx: &mut Context<Self>) {
+        let Some(snapshot) = self.snapshot.as_mut() else { return };
+        if snapshot.layouts.iter().any(|l| l.tab_id == tab_id && l.focused_pane_id == pane_id) {
+            return;
+        }
+        snapshot.focus_pane(tab_id, pane_id);
+        self.send(Command::Focus { pane_id: pane_id.into() }, cx, |_, _, _| {});
+        cx.notify();
+    }
+
     /// herdr paints the terminals' default colors itself: it is told the theme's over the popup watch, which then
     /// is the client in front again (back from herdr's TUI on another machine, say).
     fn push_host_theme(&self, cx: &App) {

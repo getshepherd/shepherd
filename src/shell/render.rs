@@ -168,8 +168,7 @@ impl Render for Shell {
             (s.pane_style == crate::settings::PaneStyle::Comfortable, s.highlight_active_pane)
         };
         let radius = px(if comfortable { crate::terminal::pane::CARD_RADIUS } else { 0. });
-        // the pane the keys go to, else the last one they went to (the keys are in a panel), else herdr's focused one:
-        // a click focuses a pane here without telling herdr
+        // the pane the keys go to, else the last one they went to (the keys are in a panel), else herdr's focused one
         let focused = self.panes.iter().find(|(_, p)| p.read(cx).focus_handle(cx).is_focused(window)).map(|(id, _)| id.clone());
         if focused.is_some() {
             self.last_pane = focused.clone();
@@ -229,6 +228,10 @@ impl Render for Shell {
                                 this.float_pane(pane_id.clone(), crate::backend::Float::Raise, cx);
                             }))
                         })
+                        .on_mouse_down(MouseButton::Left, cx.listener({
+                            let (pane_id, tab_id) = (pane_id.clone(), shown_tab_id.clone());
+                            move |this, _: &MouseDownEvent, _, cx| this.click_pane(&tab_id, &pane_id, cx)
+                        }))
                         .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |this, e: &MouseDownEvent, _, cx| {
