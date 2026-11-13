@@ -11,7 +11,6 @@ mod remote;
 mod session;
 pub(crate) mod socket;
 mod wire;
-pub use wire::Rgb;
 pub use install::{install, missing};
 pub use client::{Client, EVENT_TYPES};
 pub use config::{HerdrConfig, config_home, config_path};

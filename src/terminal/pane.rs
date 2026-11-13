@@ -332,16 +332,8 @@ impl PaneTerminal {
         // whatever size the attach names.
     }
 
-    pub fn pane_id(&self) -> &str {
-        &self.pane_id
-    }
-
     pub fn geometry(&self) -> Option<GridGeometry> {
         self.geometry
-    }
-
-    pub fn ended(&self) -> Option<&str> {
-        self.ended.as_deref()
     }
 
     /// herdr's images on this pane now; returns those it no longer shows, for the window to free.

@@ -654,12 +654,6 @@ pub struct SearchTreeRow {
     pub score: i64,
 }
 
-impl SearchTreeRow {
-    pub fn as_match(&self) -> SearchMatch {
-        SearchMatch { path: self.path.clone(), name: self.name.clone(), kind: self.kind, score: self.score }
-    }
-}
-
 /// Matches grouped under their real folders, the best scored first.
 #[derive(Debug, Default)]
 pub struct SearchTreeModel {
