@@ -67,6 +67,10 @@ const MARK: char = '\u{1}';
 
 /// The machine shown from now on, by its SSH target; `None` for a local session.
 pub fn show_machine(target: Option<String>) {
+    // ponytail: the skill goes over on each switch to a machine, one SSH call; a machine changed elsewhere waits for it
+    if let Some(target) = &target {
+        crate::agent_skill::sync_machine(target.clone());
+    }
     *SHOWN.lock().unwrap() = target;
 }
 

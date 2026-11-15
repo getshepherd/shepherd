@@ -91,10 +91,47 @@ fn stub(exe: &Path) -> String {
          (herdr, Rex, hc or tmux), where the user sees each one and can take it over. Use whenever work goes to another agent: a new agent the \
          user asks for, a subagent, a review, research, a parallel subtask, a handoff to its own branch, or a skill that asks for subagents. \
          Also lists the user's Shepherd extensions (local tools with a page in Shepherd and a CLI) and their skills.\n---\n\
-         {MARK} (Settings → Backend → Agent skill), which rewrites this file: edits here are lost. -->\n\n\
+         {HEAD}\n\n\
          Run `'{exe}' skill` and follow the guide it prints. It comes from the installed Shepherd and gives the commands of the backend this \
          terminal runs on, and the extensions you can use.\n"
     )
+}
+
+/// The line after the front matter that says the file is Shepherd's.
+const HEAD: &str = "<!-- Written by Shepherd (Settings → Backend → Agent skill), which rewrites this file: edits here are lost. -->";
+
+/// The SKILL.md a herdr machine gets: no Shepherd binary there to run, so the herdr guide itself.
+fn remote_skill() -> String {
+    let guide = guide(Some("herdr")).expect("herdr has a guide");
+    format!(
+        "---\nname: shepherd\ndescription: Subagents as interactive `claude` or `codex` in their own herdr panes, where the user sees each one \
+         and can take it over. Use whenever work goes to another agent: a new agent the user asks for, a subagent, a review, research, a parallel \
+         subtask, a handoff to its own branch, or a skill that asks for subagents.\n---\n{HEAD}\n\n{guide}"
+    )
+}
+
+/// The script that puts [`remote_skill`] into a machine's skill folders, or takes it out (`on` false), leaving a
+/// `shepherd` skill the user made there.
+fn remote_script(on: bool) -> String {
+    let q = crate::herdr::quote;
+    let write = if on { format!("mkdir -p \"$d\"; printf %s {} > \"$d/SKILL.md\"", q(&remote_skill())) } else { ":".into() };
+    format!(
+        "for d in \"$HOME/.claude/skills/shepherd\" \"$HOME/.agents/skills/shepherd\"; do\n\
+         if [ -e \"$d\" ] && ! grep -qF {mark} \"$d/SKILL.md\" 2>/dev/null; then continue; fi\n\
+         rm -rf \"$d\"; {write}\ndone\n",
+        mark = q(MARK)
+    )
+}
+
+/// Brings the herdr machine at `target` in line with this Mac: the skill there when it is on here, gone when off.
+/// In the background; a machine out of reach keeps what it had.
+pub fn sync_machine(target: String) {
+    let on = installed();
+    std::thread::spawn(move || match crate::herdr::ssh(&target, &remote_script(on)) {
+        Ok(out) if !out.status.success() => eprintln!("shepherd: agent skill on {target}: {}", String::from_utf8_lossy(&out.stderr).trim()),
+        Err(e) => eprintln!("shepherd: agent skill on {target}: {e}"),
+        Ok(_) => {}
+    });
 }
 
 /// Claude Code's skills, and `~/.agents/skills`, which Codex and Pi read.
@@ -111,10 +148,14 @@ pub fn installed() -> bool {
     dirs(&crate::settings::home()).iter().any(|d| ours(d))
 }
 
-/// Writes the skill into each folder, pointing at this binary, or takes it out. A `shepherd` skill the user made is
-/// left as it is.
+/// Writes the skill into each folder, pointing at this binary, or takes it out, and so on the herdr machine shown. A
+/// `shepherd` skill the user made is left as it is.
 pub fn set(on: bool) -> io::Result<()> {
-    set_in(&crate::settings::home(), on.then(std::env::current_exe).transpose()?.as_deref())
+    set_in(&crate::settings::home(), on.then(std::env::current_exe).transpose()?.as_deref())?;
+    if let Some(target) = crate::herdr::shown_machine() {
+        sync_machine(target);
+    }
+    Ok(())
 }
 
 /// `exe`: the binary to point at, `None` to take the skill out.
@@ -173,6 +214,27 @@ mod tests {
         }
         assert!(guide(Some("zellij")).is_err());
         assert!(guide(None).unwrap().contains("ask the user"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_machine_gets_the_herdr_guide_and_keeps_the_users_own() {
+        let home = tempfile::tempdir().unwrap();
+        let [claude, agents] = dirs(home.path());
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(agents.join("SKILL.md"), "mine").unwrap();
+        // as `herdr::ssh` runs it: `sh -c '…'`
+        let run = |on| {
+            let script = format!("sh -c {}", crate::herdr::quote(&remote_script(on)));
+            let out = std::process::Command::new("sh").arg("-c").arg(script).env("HOME", home.path()).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        };
+        run(true);
+        assert_eq!(std::fs::read_to_string(claude.join("SKILL.md")).unwrap(), remote_skill());
+        assert!(remote_skill().contains("herdr agent start") && remote_skill().contains(MARK));
+        run(false);
+        assert!(!claude.exists());
+        assert_eq!(std::fs::read_to_string(agents.join("SKILL.md")).unwrap(), "mine");
     }
 
     #[test]
