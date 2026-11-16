@@ -107,6 +107,7 @@ fn main() {
                             shell.show_review_tab(tab, window, cx);
                         }
                         (None, None, "browser") => shell.open_blank_tab(None, window, cx),
+                        (None, None, "browser-agent") => shell.show_agent_driving(window, cx),
                         (None, None, "browser-menu") => {
                             shell.open_blank_tab(None, window, cx);
                             shell.open_browser_menu(cx);

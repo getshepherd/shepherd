@@ -14,6 +14,9 @@ use std::time::Duration;
 pub struct Request {
     pub args: Vec<String>,
     pub workspace: Option<String>,
+    /// The agent's pane, which the tab names while the agent drives it.
+    #[serde(default)]
+    pub pane: Option<String>,
     pub cwd: PathBuf,
 }
 
@@ -89,32 +92,13 @@ pub fn parse(args: &[String]) -> Result<(Option<String>, Command), String> {
     Ok((tab, command))
 }
 
-pub const HELP: &str = "Drive Shepherd's browser: the browser tabs in its right panel and the pages in its sidebar.
-
-Usage: shepherd browser [--tab <id>] <command> [arguments]
-
-Without --tab a command goes to the browser tab shown in this workspace's right panel, else to the workspace's
-last one.
-
-  tabs                     Every tab and page: id, workspace, url, title, whether shown, whether this workspace's.
-  eval <code>              Runs JavaScript in the page and prints the result: a string as is, anything else as JSON.
-                           An expression, or statements that `return` the value; `await` works, a Promise is awaited.
-                           `-` reads the code from stdin. --timeout <seconds> (30).
-  network [<n>]            The page's requests: #n, method, status, kind, time, URL. fetch and XMLHttpRequest
-                           ones (#n) have their status and, for text, their body: `network <n>` prints it.
-                           Others (images, scripts, CSS) come from Resource Timing. --clear empties the list.
-  console                  The page's console lines and uncaught errors since it loaded. --clear empties them.
-  open <url>               Loads the URL in the tab.
-  new <url>                A new browser tab in this workspace, on the URL; prints its id.
-  reload                   Reloads the tab.
-  screenshot [<path>]      The page as a PNG (macOS); prints the path.
-
-Requests and console lines are recorded from the page's load: reload a page opened earlier to see its first ones.
-";
+/// `shepherd browser skill` and `--help`: the commands, and how an agent goes about them. `shepherd skill` only points
+/// here, so its guide stays short.
+pub const HELP: &str = include_str!("../assets/agent-skill/browser.md");
 
 /// `shepherd browser …`: sends the arguments to the window and prints its answer.
 pub fn cli(args: &[String]) -> i32 {
-    if args.first().is_none_or(|a| matches!(a.as_str(), "-h" | "--help" | "help")) {
+    if args.first().is_none_or(|a| matches!(a.as_str(), "-h" | "--help" | "help" | "skill")) {
         print!("{HELP}");
         return 0;
     }
@@ -131,6 +115,7 @@ pub fn cli(args: &[String]) -> i32 {
     let request = Request {
         args,
         workspace: std::env::var("HERDR_WORKSPACE_ID").ok().filter(|w| !w.is_empty()),
+        pane: std::env::var("HERDR_PANE_ID").ok(),
         cwd: std::env::current_dir().unwrap_or_default(),
     };
     match ask(&request) {

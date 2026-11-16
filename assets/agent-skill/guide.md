@@ -44,18 +44,6 @@ An agent that is blocked on a question or a permission: answer it if it is yours
 
 ## Shepherd's browser
 
-Shepherd has a browser: tabs in each workspace's right panel, and pages in its sidebar. `shepherd browser` drives
-them from a pane on this Mac (not over SSH): `shepherd` below is the binary you ran `skill` with. Without `--tab <id>`
-a command goes to the browser tab this workspace shows in its right panel (else its last one); outside herdr, to the
-page the window shows. Use it to check a web app you are working on in the browser the user is looking at.
-
-- `shepherd browser tabs`: every tab and page as JSON: id, workspace, url, title, `shown`, `this_workspace`.
-- `shepherd browser eval '<js>'`: runs JavaScript in the page and prints the result (a string as is, else JSON). An
-  expression, or statements that `return` the value; `await` works. `-` reads the code from stdin.
-- `shepherd browser network`, then `network <n>` for a fetch/XHR request's body; `console` for its logs and errors.
-  Both record from the page's load: `reload` a page opened before to see its first requests.
-- `shepherd browser new <url>` opens a tab in this workspace (prints its id); `open <url>` loads one in the tab;
-  `reload`; `screenshot [<path>]` saves a PNG and prints its path.
-
-The pages are the user's, signed in to their accounts: read and test, and ask before anything that changes data on a
-site that isn't the app you are building.
+Shepherd has a browser (tabs in each workspace's right panel, pages in its sidebar) that you can drive from a pane on
+this Mac: list its tabs, run JavaScript, read requests and the console, open, reload, screenshot. Before using it, run
+the binary you ran `skill` with as `<it> browser skill` and follow what it prints.

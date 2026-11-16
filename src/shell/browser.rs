@@ -38,6 +38,8 @@ pub(super) struct Browser {
     pub(super) site_icons: HashMap<String, Option<std::sync::Arc<gpui::Image>>>,
     /// Each tab's page zoom, 1 unless changed in its menu.
     zoom: HashMap<String, f64>,
+    /// When an agent's `shepherd browser` last acted on each tab, and its pane (empty outside herdr).
+    pub(super) driven: HashMap<String, (Instant, String)>,
 }
 
 struct Address {
@@ -54,10 +56,18 @@ impl Browser {
         self.tabs.iter().map(|t| WebEntry { id: t.id.clone(), url: t.url.clone(), ..Default::default() })
     }
 
+    /// The pane of the agent driving tab `id`, while it acted in the last `DRIVEN`.
+    pub(super) fn driven_by(&self, id: &str) -> Option<&str> {
+        self.driven.get(id).filter(|(at, _)| at.elapsed() < DRIVEN).map(|(_, pane)| pane.as_str())
+    }
+
     pub(super) fn editing(&self) -> bool {
         self.address.as_ref().is_some_and(|a| a.editing)
     }
 }
+
+/// How long a command keeps its tab marked as driven by an agent, as `shepherd device` keeps its device.
+pub(super) const DRIVEN: Duration = Duration::from_secs(10);
 
 /// Whether page `id` is a browser tab's.
 pub(super) fn is_tab(id: &str) -> bool {

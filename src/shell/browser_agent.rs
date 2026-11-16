@@ -41,7 +41,13 @@ impl Shell {
         let ws = request.workspace.as_deref();
         match command {
             Command::Tabs => return drop(reply.send(self.agent_tabs(ws, window, cx))),
-            Command::New(url) => return drop(reply.send(self.agent_new_tab(ws, &url, window, cx))),
+            Command::New(url) => {
+                let made = self.agent_new_tab(ws, &url, window, cx);
+                if made.ok {
+                    self.drive(made.out.clone(), request.pane.clone(), cx);
+                }
+                return drop(reply.send(made));
+            }
             _ => {}
         }
         let key = match self.agent_page(tab.as_deref(), ws, window, cx) {
@@ -51,6 +57,8 @@ impl Shell {
         let Some(page) = self.pages.live.get(&key) else { return drop(reply.send(Reply::err("the tab has no page"))) };
         let view = Rc::downgrade(&page.view);
         let id = seen_key(&key);
+        self.drive(id.clone(), request.pane.clone(), cx);
+        let Some(page) = self.pages.live.get(&key) else { return };
         match command {
             Command::Open(url) => {
                 let url = super::browser::typed_url(&url).unwrap_or(url);
@@ -75,6 +83,51 @@ impl Shell {
                 screenshot(&page.view, path, reply);
             }
             Command::Tabs | Command::New(_) => unreachable!("answered above"),
+        }
+    }
+
+    /// Marks tab `id` as driven by the agent in `pane` for `DRIVEN`, then lets it go with a render.
+    fn drive(&mut self, id: String, pane: Option<String>, cx: &mut Context<Self>) {
+        self.browser.driven.insert(id, (Instant::now(), pane.unwrap_or_default()));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(super::browser::DRIVEN).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
+    }
+
+    /// The row under a driven tab's address bar: which agent drives it. Not over the page, whose native view would
+    /// cover it.
+    pub(super) fn render_agent_driving(&self, id: &str, theme: &Theme) -> Option<Div> {
+        let pane = self.browser.driven_by(id)?;
+        let label = match pane {
+            "" => "An agent is driving this tab".to_string(),
+            pane => format!("An agent is driving this tab · {pane}"),
+        };
+        Some(
+            div()
+                .h(px(26.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(6.))
+                .bg(theme.accent.opacity(0.12))
+                .border_b_1()
+                .border_color(theme.accent.opacity(0.35))
+                .text_size(px(12.))
+                .text_color(theme.text)
+                .child(gpui::svg().path("icons/bot.svg").size(px(14.)).text_color(theme.accent))
+                .child(label),
+        )
+    }
+
+    /// `SHEPHERD_PANEL=browser-agent`: a blank tab as an agent's command leaves it (screenshots).
+    pub fn show_agent_driving(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_blank_tab(None, window, cx);
+        if let Some(id) = self.browser.tabs.last().map(|t| t.id.clone()) {
+            self.drive(id, Some("w1:p1".into()), cx);
         }
     }
 
