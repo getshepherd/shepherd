@@ -583,6 +583,21 @@ impl Render for Shell {
                     this.pane_command(w, cx, |pane_id| Command::Zoom { pane_id });
                 }
             }))
+            .on_action(cx.listener(|this, swipe: &crate::terminal::pane::SwipeAcross, w, cx| match SettingsGlobal::of(cx).settings.pane_swipe {
+                crate::settings::PaneSwipe::Tabs => this.step_tab(swipe.left, cx),
+                // fingers right pull the sidebar out from the left edge, else push the right panel away; left, the other way round
+                crate::settings::PaneSwipe::Sidebars => {
+                    let (near, far) = if swipe.left { (this.sidebar_open, this.right_panel_shown(w)) } else { (this.right_panel_shown(w), this.sidebar_open) };
+                    match (swipe.left, near, far) {
+                        (true, true, _) => this.toggle_sidebar(cx),
+                        (true, false, false) => this.toggle_right_panel(w, cx),
+                        (false, true, _) => this.toggle_right_panel(w, cx),
+                        (false, false, false) => this.toggle_sidebar(cx),
+                        _ => {}
+                    }
+                }
+                crate::settings::PaneSwipe::Terminal => {}
+            }))
             .on_action(cx.listener(|this, _: &FloatPane, w, cx| this.toggle_float(w, cx)))
             .on_action(cx.listener(|this, _: &MinimizeFloating, w, cx| this.toggle_minimize(false, w, cx)))
             .on_action(cx.listener(|this, _: &MinimizeAllFloating, w, cx| this.toggle_minimize(true, w, cx)))

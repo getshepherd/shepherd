@@ -202,6 +202,27 @@ pub struct PinchZoom {
     pub spread: bool,
 }
 
+/// A horizontal two-finger swipe over a pane (`left`, fingers to the left): the Shell turns it into what the settings
+/// say, a tab over or a sidebar out or away.
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = shepherd, no_json)]
+pub struct SwipeAcross {
+    pub left: bool,
+}
+
+/// How far a swipe goes across, in px, before it acts: the sidebar's swipe between places commits at the same.
+const SWIPE_COMMIT: f32 = 60.;
+
+/// A two-finger scroll over the pane, from its first event to its last.
+#[derive(Default)]
+struct Swipe {
+    /// Across (decided by its first few px) or along, which scrolls the terminal.
+    across: Option<bool>,
+    travel: f32,
+    /// It has acted: one swipe, one step.
+    done: bool,
+}
+
 /// How far a pinch goes, in summed magnification, before it zooms: past a slip of the fingers.
 const PINCH_COMMIT: f32 = 0.2;
 
@@ -234,6 +255,7 @@ pub struct PaneTerminal {
     wheel_acc: f32,
     /// The pinch under way, by its summed magnification; `None` once it has zoomed, so a gesture zooms once.
     pinch: Option<f32>,
+    swipe: Option<Swipe>,
     drag: Option<Drag>,
     /// The pane's app asks for mouse reporting (from herdr; false until it says otherwise).
     mouse_capture: bool,
@@ -316,6 +338,7 @@ impl PaneTerminal {
             _focus_watch: Vec::new(),
             wheel_acc: 0.0,
             pinch: None,
+            swipe: None,
             drag: None,
             mouse_capture: false,
             keyboard_flags: 0,
@@ -847,7 +870,43 @@ impl PaneTerminal {
         }
     }
 
-    fn on_scroll_wheel(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+    /// One event of a two-finger scroll, taken as a swipe when it goes across: once far enough, it is dispatched as
+    /// [`SwipeAcross`]. True while the swipe is across, so it doesn't scroll the terminal too. Momentum after the
+    /// fingers lift comes after the swipe ended, and is not one.
+    fn swipe(&mut self, e: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let ScrollDelta::Pixels(d) = e.delta else { return false };
+        if crate::settings::SettingsGlobal::of(cx).settings.pane_swipe == crate::settings::PaneSwipe::Terminal {
+            return false;
+        }
+        let (dx, dy) = (f32::from(d.x), f32::from(d.y));
+        match e.touch_phase {
+            gpui::TouchPhase::Started => {
+                self.swipe = Some(Swipe::default());
+                false
+            }
+            gpui::TouchPhase::Moved => {
+                let Some(swipe) = self.swipe.as_mut() else { return false };
+                if swipe.across.is_none() && dx.hypot(dy) > 2. {
+                    swipe.across = Some(dx.abs() > dy.abs() * 1.5);
+                }
+                if swipe.across != Some(true) {
+                    return false;
+                }
+                swipe.travel += dx;
+                if !swipe.done && swipe.travel.abs() > SWIPE_COMMIT {
+                    swipe.done = true;
+                    window.dispatch_action(Box::new(SwipeAcross { left: swipe.travel < 0. }), cx);
+                }
+                true
+            }
+            _ => self.swipe.take().is_some_and(|s| s.across == Some(true)),
+        }
+    }
+
+    fn on_scroll_wheel(&mut self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.swipe(event, window, cx) {
+            return;
+        }
         let line_h = self.geometry.map_or(TERM_LINE_HEIGHT, |g| g.line_h);
         let px = match event.delta {
             ScrollDelta::Pixels(d) => f32::from(d.y),

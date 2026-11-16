@@ -1,6 +1,6 @@
 //! Settings' window: the section list beside the shown section's page.
 use super::*;
-use crate::settings::PaneStyle;
+use crate::settings::{PaneStyle, PaneSwipe};
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -144,6 +144,17 @@ impl Render for SettingsView {
                         toggle_row(&theme, false, "pinch-zoom", "Pinch to zoom pane", "Pinch out on the trackpad over a pane to zoom it, pinch in to unzoom.", settings.pinch_zoom).on_click(cx.listener(
                             |_, _: &ClickEvent, _, cx| update(cx, |s| s.pinch_zoom = !s.pinch_zoom),
                         )),
+                    )
+                    .child(
+                        card_row(&theme, false).child(row_text(&theme, "Swipe over a pane", "Two fingers across: to the next or previous tab, the sidebars out and away, or left to the terminal.")).child(
+                            crate::ui::segmented(
+                                &theme,
+                                "pane-swipe",
+                                &[(PaneSwipe::Tabs, "Tabs", None), (PaneSwipe::Sidebars, "Sidebars", None), (PaneSwipe::Terminal, "Terminal", None)],
+                                settings.pane_swipe,
+                                |swipe, cx| update(cx, |s| s.pane_swipe = swipe),
+                            ),
+                        ),
                     )
                     // Secure Keyboard Entry is macOS's
                     .when(cfg!(target_os = "macos"), |el| el.child(

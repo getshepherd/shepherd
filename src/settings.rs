@@ -103,6 +103,7 @@ pub struct Settings {
     pub copy_on_select: bool,
     /// A trackpad's pinch over a pane zooms it to fill its tab, and pinching in gives the tab back.
     pub pinch_zoom: bool,
+    pub pane_swipe: PaneSwipe,
     /// The old switch for the cursor's trail: read once, as `cursor_effect` None when off, never written.
     #[serde(rename = "animated_cursor", skip_serializing)]
     legacy_animated_cursor: bool,
@@ -153,6 +154,20 @@ pub enum PaneStyle {
     #[default]
     #[serde(other)]
     Compact,
+}
+
+/// What a horizontal two-finger swipe over a pane does. An unknown (future) value reads as tabs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PaneSwipe {
+    /// Fingers to the right pull the sidebar out, or push the right panel away; to the left the other way round.
+    Sidebars,
+    /// Shepherd leaves the swipe to the terminal under it.
+    Terminal,
+    /// Fingers to the left bring the next tab, to the right the previous one, as the sidebar's swipe between places.
+    #[default]
+    #[serde(other)]
+    Tabs,
 }
 
 /// How the sidebar lists the work. An unknown (future) value reads as herdr's.
@@ -428,6 +443,7 @@ impl Default for Settings {
             dock_badge: true,
             copy_on_select: true,
             pinch_zoom: true,
+            pane_swipe: PaneSwipe::default(),
             legacy_animated_cursor: true,
             pane_style: PaneStyle::default(),
             highlight_active_pane: false,
@@ -775,6 +791,16 @@ mod tests {
         assert_eq!(parse(r#"{"annotation_agents": "project"}"#), AgentScope::Project);
         assert_eq!(parse(r#"{"annotation_agents": "all"}"#), AgentScope::All);
         assert_eq!(parse(r#"{"annotation_agents": "everyone"}"#), AgentScope::Worktree);
+    }
+
+    #[test]
+    fn a_pane_swipe_reads_back_and_an_unknown_one_is_tabs() {
+        let (_d, path) = tmp();
+        std::fs::write(&path, r#"{"pane_swipe": "sidebars"}"#).unwrap();
+        assert_eq!(Settings::load(&path).0.pane_swipe, PaneSwipe::Sidebars);
+        std::fs::write(&path, r#"{"pane_swipe": "spaces"}"#).unwrap();
+        assert_eq!(Settings::load(&path).0.pane_swipe, PaneSwipe::Tabs);
+        assert_eq!(Settings::default().pane_swipe, PaneSwipe::Tabs);
     }
 
     #[test]
