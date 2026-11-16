@@ -1394,9 +1394,7 @@ const NOTIFY_SCRIPT: &str = r#"(() => {
       setTimeout(() => this.#fire('show'));
     }
     #fire(type) {
-      const e = new Event(type, { cancelable: type === 'click' });
-      this['on' + type]?.call(this, e);
-      this.dispatchEvent(e);
+      this.dispatchEvent(new Event(type, { cancelable: type === 'click' }));
     }
     close() {
       if (shown.delete(this.#id)) this.#fire('close');
@@ -1409,7 +1407,21 @@ const NOTIFY_SCRIPT: &str = r#"(() => {
     }
     static click(id) { shown.get(id)?.#fire('click'); }
   }
-  for (const k of ['onclick', 'onshow', 'onclose', 'onerror']) Notification.prototype[k] = null;
+  // `onclick` and the rest are listeners too, called in the order they were set among the others
+  for (const type of ['click', 'show', 'close', 'error']) {
+    const set = new WeakMap();
+    Object.defineProperty(Notification.prototype, 'on' + type, {
+      get() { return set.get(this)?.handler ?? null; },
+      set(handler) {
+        const was = set.get(this);
+        if (was) this.removeEventListener(type, was);
+        const listener = typeof handler === 'function' ? Object.assign(e => handler.call(this, e), { handler }) : null;
+        set.set(this, listener);
+        if (listener) this.addEventListener(type, listener);
+      },
+      configurable: true,
+    });
+  }
   const click = Notification.click;
   delete Notification.click;
   Object.defineProperty(window, 'Notification', { value: Notification, writable: true, configurable: true });
