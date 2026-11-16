@@ -724,15 +724,16 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_serve_restarts_when_its_binary_changes_and_after_it_exits_holds_when_stopped_and_stops_when_removed() {
-        use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("sleepy");
         std::fs::create_dir(&dir).unwrap();
         std::fs::write(dir.join("state.json"), r#"{"port":1,"token":"t","start":"shepherd"}"#).unwrap();
         let binary = dir.join("sleepy");
-        // paddock's `uninstall` takes the binary away and leaves the folder
-        std::fs::write(&binary, "#!/bin/sh\n[ \"$1\" = uninstall ] && exec rm \"$0\"\nexec sleep 30\n").unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // paddock's `uninstall` takes the binary away and leaves the folder. Written by another process: a write fd of
+        // this one leaks into a child another test forks meanwhile, and exec of the binary fails with ETXTBSY until it execs.
+        let script = "#!/bin/sh\n[ \"$1\" = uninstall ] && exec rm \"$0\"\nexec sleep 30\n";
+        let wrote = std::process::Command::new("sh").args(["-c", "printf %s \"$2\" > \"$1\" && chmod 755 \"$1\"", "sh"]).arg(&binary).arg(script).status();
+        assert!(wrote.unwrap().success());
         let list = scan(root.path());
         let pid = || RUNS.lock().unwrap().get("sleepy").and_then(|r| r.child.as_ref().map(Child::id));
         supervise(&list);
@@ -741,7 +742,8 @@ mod tests {
         assert_eq!(pid(), Some(first), "left running");
         // installed again: a newer binary
         let later = SystemTime::now() + Duration::from_secs(5);
-        std::fs::File::options().write(true).open(&binary).unwrap().set_modified(later).unwrap();
+        // read-only, for the same reason
+        std::fs::File::open(&binary).unwrap().set_modified(later).unwrap();
         supervise(&list);
         let second = pid().expect("restarted");
         assert_ne!(second, first);
