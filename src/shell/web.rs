@@ -71,6 +71,8 @@ pub(super) enum PageEvent {
     Picked(String),
     /// A device's 3D view has drawn the device: its page may show.
     Ready,
+    /// A web notification the page posted.
+    Notify(WebNote),
 }
 
 pub(super) struct Page {
@@ -365,6 +367,30 @@ impl Shell {
         }
     }
 
+    /// A click on notification `id` of the page made `serial`th: the page comes up as a click on its sidebar entry
+    /// or panel tab would bring it, and the notification's `click` fires in it (Slack goes to the message's channel).
+    pub(super) fn web_note_clicked(&mut self, serial: u64, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::right_panel::Surface;
+        let Some((key, view)) = self.pages.live.iter().find(|(_, p)| p.serial == serial).map(|(k, p)| (k.clone(), p.view.clone())) else { return };
+        let in_panel = self.right.panels.iter().find_map(|(ws, panel)| {
+            let surface = panel.tabs.iter().find(|s| matches!(s, Surface::Browser(i) | Surface::Extension(i) if *i == key.0))?;
+            Some((ws.clone(), surface.clone()))
+        });
+        match in_panel {
+            Some((ws, surface)) => {
+                let tab = self.snapshot.as_ref().and_then(|s| s.pick_tab_in(None, Some(&ws))).map(|t| t.tab_id.clone());
+                let tab = if self.shown_tab().is_some_and(|t| t.workspace_id == ws) { self.selected_tab.clone() } else { tab };
+                self.select_tab(tab);
+                self.right.panels.entry(ws).or_default().add(surface);
+            }
+            None => self.show_web(key.0, window, cx),
+        }
+        if id != 0 {
+            let _ = view.evaluate_script(&format!("window.__shepherdNotificationClick?.({id})"));
+        }
+        cx.notify();
+    }
+
     /// Entry `id`'s page, made if it isn't yet; false when it can't be, a toast saying why, or on Wayland, where a web
     /// view can't sit in Shepherd's window, with its URL in the browser.
     pub(super) fn ensure_page(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -490,7 +516,7 @@ impl Shell {
             let _ = events.unbounded_send((key.clone(), serial, event));
         };
         let (title, loaded, opened, followed, tabbed) = (send.clone(), send.clone(), send.clone(), send.clone(), send.clone());
-        let ready = send.clone();
+        let (ready, notified) = (send.clone(), send.clone());
         let (reviewed, reviewed_new, installs) = (send.clone(), send.clone(), send.clone());
         #[cfg(target_os = "macos")]
         let key_event = send;
@@ -528,7 +554,7 @@ impl Shell {
         // a device's 3D view: its frames, model and input go over a scheme and IPC of its own
         let builder = match device {
             Some((session, feed)) => super::device::three::attach(builder, session, feed, self.rt.clone(), move || ready(PageEvent::Ready)),
-            None => new_tabs(builder, tab),
+            None => new_tabs(builder, tab, move |note| notified(PageEvent::Notify(note))),
         };
         // every page but a 3D view keeps its requests and console lines for agents (`shepherd browser`)
         let builder = match instrumented {
@@ -740,6 +766,18 @@ impl Shell {
             // every 100 ms while picking: nothing below is for it
             PageEvent::Picked(result) => return self.annotation_polled(&key, &result, window, cx),
             PageEvent::Ready => self.device_page_ready(&key.0),
+            // ponytail: posted even while the page is in view and the window in front, as Safari does; the page
+            // itself decides (Slack doesn't notify for the channel you are reading)
+            PageEvent::Notify(note) => {
+                let seen = page.title.clone();
+                let entries = sidebar_entries(cx).into_iter().chain(self.panel_entries(cx));
+                let name = entries.into_iter().find(|e| e.id == key.0).map(|e| e.name).filter(|n| !n.is_empty());
+                let name = name.or(seen).unwrap_or_else(|| self.browser_label(&key.0));
+                let title = if note.title.is_empty() { name } else { format!("{} · {name}", note.title) };
+                let sound = !note.silent && SettingsGlobal::of(cx).settings.notify_sound;
+                crate::notify::show(cx, &crate::notify::web_tag(serial, note.id), title, note.body, sound, None);
+                return;
+            }
         }
         if browser::is_tab(&key.0) {
             self.browser_loaded(&key, window, cx);
@@ -1331,12 +1369,92 @@ const NEW_TAB_SCRIPT: &str = r#"(() => {
   });
 })();"#;
 
-/// A page that sends the links asked for in a new tab to `tab`.
-fn new_tabs(builder: wry::WebViewBuilder<'_>, tab: impl Fn(String) + 'static) -> wry::WebViewBuilder<'_> {
-    builder.with_initialization_script(NEW_TAB_SCRIPT).with_ipc_handler(move |request| {
+/// The Web Notifications API, which WKWebView leaves out (Slack then thinks there are none): every page may notify,
+/// without asking. A notification goes to the page's IPC as `notify:` and JSON, and Shepherd posts it as a system one;
+/// a click on that calls `window.__shepherdNotificationClick(id)` back, which fires the notification's `click`.
+/// A service worker registration's `showNotification` posts too (its click brings the page up, no `notificationclick`
+/// reaches the worker). ponytail: main frame only, as wry's `window.ipc` and `evaluate_script` are; no Web Push.
+const NOTIFY_SCRIPT: &str = r#"(() => {
+  const shown = new Map();
+  let made = 0;
+  const send = (id, title, o) => window.ipc.postMessage('notify:' + JSON.stringify({ id, title: String(title), body: String(o?.body ?? ''), silent: !!o?.silent }));
+  class Notification extends EventTarget {
+    #id = ++made;
+    constructor(title, options = {}) {
+      super();
+      this.title = String(title);
+      for (const k of ['body', 'tag', 'icon', 'image', 'badge', 'lang']) this[k] = String(options[k] ?? '');
+      for (const k of ['silent', 'requireInteraction', 'renotify']) this[k] = !!options[k];
+      this.dir = options.dir ?? 'auto';
+      this.data = options.data ?? null;
+      this.timestamp = options.timestamp ?? Date.now();
+      this.actions = [];
+      shown.set(this.#id, this);
+      send(this.#id, this.title, options);
+      setTimeout(() => this.#fire('show'));
+    }
+    #fire(type) {
+      this.dispatchEvent(new Event(type, { cancelable: type === 'click' }));
+    }
+    close() {
+      if (shown.delete(this.#id)) this.#fire('close');
+    }
+    static get permission() { return 'granted'; }
+    static get maxActions() { return 0; }
+    static requestPermission(callback) {
+      callback?.('granted');
+      return Promise.resolve('granted');
+    }
+    static click(id) { shown.get(id)?.#fire('click'); }
+  }
+  // `onclick` and the rest are listeners too, called in the order they were set among the others
+  for (const type of ['click', 'show', 'close', 'error']) {
+    const set = new WeakMap();
+    Object.defineProperty(Notification.prototype, 'on' + type, {
+      get() { return set.get(this)?.handler ?? null; },
+      set(handler) {
+        const was = set.get(this);
+        if (was) this.removeEventListener(type, was);
+        const listener = typeof handler === 'function' ? Object.assign(e => handler.call(this, e), { handler }) : null;
+        set.set(this, listener);
+        if (listener) this.addEventListener(type, listener);
+      },
+      configurable: true,
+    });
+  }
+  const click = Notification.click;
+  delete Notification.click;
+  Object.defineProperty(window, 'Notification', { value: Notification, writable: true, configurable: true });
+  Object.defineProperty(window, '__shepherdNotificationClick', { value: click });
+  // a page's permission query says granted too
+  const query = navigator.permissions?.query?.bind(navigator.permissions);
+  if (query) navigator.permissions.query = d => d?.name === 'notifications' ? Promise.resolve({ state: 'granted', status: 'granted', name: 'notifications', onchange: null, addEventListener() {}, removeEventListener() {} }) : query(d);
+  const reg = window.ServiceWorkerRegistration?.prototype;
+  if (reg) {
+    reg.showNotification = function (title, options) { send(0, title, options); return Promise.resolve(); };
+    reg.getNotifications = () => Promise.resolve([]);
+  }
+})();"#;
+
+/// What a page's `new Notification` (or `showNotification`) posted. `id` is 0 for a service worker registration's.
+#[derive(Debug, serde::Deserialize, PartialEq)]
+pub(super) struct WebNote {
+    pub id: u64,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub silent: bool,
+}
+
+/// A page that sends the links asked for in a new tab to `tab`, and its notifications to `notified`.
+fn new_tabs(builder: wry::WebViewBuilder<'_>, tab: impl Fn(String) + 'static, notified: impl Fn(WebNote) + 'static) -> wry::WebViewBuilder<'_> {
+    builder.with_initialization_script(NEW_TAB_SCRIPT).with_initialization_script(NOTIFY_SCRIPT).with_ipc_handler(move |request| {
         // any script on the page can post: only a web link opens
         if let Some(url) = request.body().strip_prefix("tab:").filter(|u| u.starts_with("http://") || u.starts_with("https://")) {
             tab(url.to_string());
+        } else if let Some(note) = request.body().strip_prefix("notify:").and_then(|n| serde_json::from_str(n).ok()) {
+            notified(note);
         }
     })
 }
