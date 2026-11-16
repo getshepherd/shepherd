@@ -459,6 +459,19 @@ impl Shell {
                 // Shepherd where it is.
                 let (this, handle) = (cx.entity().downgrade(), window.window_handle());
                 cx.on_system_notification_response(move |response, cx| {
+                    // a web page's brings the page up, and its `click` fires in the page
+                    if let Some((serial, id)) = crate::notify::web_note(&response.tag) {
+                        let this = this.clone();
+                        let _ = handle.update(cx, |_, window, cx| {
+                            let _ = this.update(cx, |s, cx| s.web_note_clicked(serial, id, window, cx));
+                            if cfg!(any(target_os = "macos", windows)) {
+                                cx.activate(true);
+                            } else {
+                                window.activate_window();
+                            }
+                        });
+                        return;
+                    }
                     let approve = response.action_id.as_deref() == Some(crate::notify::APPROVE);
                     let reply = response.text.as_deref().map(str::trim).filter(|t| !t.is_empty() && response.action_id.as_deref() == Some(crate::notify::REPLY));
                     let answered = this.update(cx, |s, cx| {

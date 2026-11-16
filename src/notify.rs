@@ -33,6 +33,20 @@ pub fn tag_pane(tag: &str) -> &str {
     tag.split(TAG_SEP).next().unwrap_or(tag)
 }
 
+/// Starts the tag of a web page's notification, in place of a pane.
+const WEB: &str = "web:";
+
+/// The tag of notification `id` from the page made `serial`th.
+pub fn web_tag(serial: u64, id: u64) -> String {
+    format!("{WEB}{serial}:{id}")
+}
+
+/// The page and notification a web notification's tag names; `None` for an agent's.
+pub fn web_note(tag: &str) -> Option<(u64, u64)> {
+    let (serial, id) = tag_pane(tag).strip_prefix(WEB)?.split_once(':')?;
+    Some((serial.parse().ok()?, id.parse().ok()?))
+}
+
 /// The id of a waiting agent's Approve button.
 pub const APPROVE: &str = "approve";
 
@@ -300,6 +314,14 @@ mod tests {
     fn a_tag_names_its_pane() {
         assert_eq!(tag_pane("w2:p1#1791794600123"), "w2:p1");
         assert_eq!(tag_pane("w2:p1"), "w2:p1");
+    }
+
+    #[test]
+    fn a_web_tag_names_its_page_and_notification() {
+        let tag = format!("{}{TAG_SEP}1791794600123", web_tag(7, 3));
+        assert_eq!(web_note(&tag), Some((7, 3)));
+        assert_eq!(web_note("w2:p1#1791794600123"), None);
+        assert_eq!(web_note("web:x:3"), None);
     }
 
     #[test]
