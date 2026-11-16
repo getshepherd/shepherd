@@ -514,8 +514,10 @@ impl Shell {
             Some(config) => wry::WebViewBuilderExtMacos::with_webview_configuration(builder, config),
             None => builder,
         };
+        // every page but a device's 3D view calls itself Safari: a sidebar page too, or Slack there says the browser
+        // isn't supported
         #[cfg(target_os = "macos")]
-        let builder = match browser {
+        let builder = match device.is_none() {
             true => builder.with_user_agent(safari_agent()),
             false => builder,
         };
@@ -1377,7 +1379,7 @@ pub(super) fn nav_frame(theme: &Theme, id: impl Into<gpui::ElementId>, enabled: 
         .when(enabled, |el| el.cursor_pointer().hover(move |s| s.bg(hover)))
 }
 
-/// What a browser tab calls itself: Safari's user agent, Safari's version on this Mac in it. WebKit's own names no
+/// What a page calls itself: Safari's user agent, Safari's version on this Mac in it. WebKit's own names no
 /// browser, and a site takes it for one it doesn't know: Proton's sign-in then talks to Proton Pass the Firefox way,
 /// by window messages a Chrome extension doesn't answer, where as Safari it messages the extension directly
 /// (`externally_connectable`), which WebKit delivers.
