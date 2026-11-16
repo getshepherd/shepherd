@@ -547,6 +547,15 @@ impl Render for Shell {
                 }
                 this.pane_command(w, cx, |pane_id| Command::Zoom { pane_id })
             }))
+            .on_action(cx.listener(|this, pinch: &crate::terminal::pane::PinchZoom, w, cx| {
+                let Some(tab) = this.shown_tab() else { return };
+                let Some(snapshot) = this.snapshot.as_ref() else { return };
+                let zoomed = snapshot.layouts.iter().any(|l| l.tab_id == tab.tab_id && l.zoomed);
+                // spread on a zoomed pane, pinched on one in its split, or a lone pane: nothing to do
+                if pinch.spread != zoomed && (zoomed || snapshot.pane_frames(&tab.tab_id).len() > 1) {
+                    this.pane_command(w, cx, |pane_id| Command::Zoom { pane_id });
+                }
+            }))
             .on_action(cx.listener(|this, _: &FloatPane, w, cx| this.toggle_float(w, cx)))
             .on_action(cx.listener(|this, _: &MinimizeFloating, w, cx| this.toggle_minimize(false, w, cx)))
             .on_action(cx.listener(|this, _: &MinimizeAllFloating, w, cx| this.toggle_minimize(true, w, cx)))

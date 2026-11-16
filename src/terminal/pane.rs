@@ -195,6 +195,16 @@ struct Drag {
     button: MouseButton,
 }
 
+/// A pinch over a pane (`spread`, fingers apart): the Shell zooms or unzooms the pane, whichever it asks for.
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = shepherd, no_json)]
+pub struct PinchZoom {
+    pub spread: bool,
+}
+
+/// How far a pinch goes, in summed magnification, before it zooms: past a slip of the fingers.
+const PINCH_COMMIT: f32 = 0.2;
+
 pub struct PaneTerminal {
     pane_id: String,
     /// Floats over the tab as a card: rounded in any pane style.
@@ -222,6 +232,8 @@ pub struct PaneTerminal {
     /// Redraws the pane when it gains or loses the focus, which its cursor shows; made on its first render.
     _focus_watch: Vec<Subscription>,
     wheel_acc: f32,
+    /// The pinch under way, by its summed magnification; `None` once it has zoomed, so a gesture zooms once.
+    pinch: Option<f32>,
     drag: Option<Drag>,
     /// The pane's app asks for mouse reporting (from herdr; false until it says otherwise).
     mouse_capture: bool,
@@ -303,6 +315,7 @@ impl PaneTerminal {
             focus: cx.focus_handle(),
             _focus_watch: Vec::new(),
             wheel_acc: 0.0,
+            pinch: None,
             drag: None,
             mouse_capture: false,
             keyboard_flags: 0,
@@ -812,6 +825,28 @@ impl PaneTerminal {
         }
     }
 
+    fn on_pinch(&mut self, e: &gpui::PinchEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // an open image takes the pinch to scale itself
+        if self.preview.is_some() || !crate::settings::SettingsGlobal::of(cx).settings.pinch_zoom {
+            return;
+        }
+        match e.phase {
+            gpui::TouchPhase::Started => self.pinch = Some(0.),
+            gpui::TouchPhase::Moved => {
+                let Some(travel) = self.pinch.as_mut() else { return };
+                *travel += e.delta;
+                if travel.abs() > PINCH_COMMIT {
+                    let spread = *travel > 0.;
+                    self.pinch = None;
+                    // the pane under the fingers is the one zoomed, as a click there would make it the active one
+                    window.focus(&self.focus, cx);
+                    window.dispatch_action(Box::new(PinchZoom { spread }), cx);
+                }
+            }
+            _ => self.pinch = None,
+        }
+    }
+
     fn on_scroll_wheel(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
         let line_h = self.geometry.map_or(TERM_LINE_HEIGHT, |g| g.line_h);
         let px = match event.delta {
@@ -1305,6 +1340,7 @@ impl Render for PaneTerminal {
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Middle, cx.listener(Self::on_mouse_up))
             .on_scroll_wheel(cx.listener(Self::on_scroll_wheel))
+            .on_pinch(cx.listener(Self::on_pinch))
             // files from Finder: their paths, pasted
             .on_drop(cx.listener(|pane, paths: &ExternalPaths, window, cx| {
                 window.focus(&pane.focus, cx);

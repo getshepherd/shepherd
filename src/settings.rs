@@ -101,6 +101,8 @@ pub struct Settings {
     pub dock_badge: bool,
     /// A finished selection in a pane goes to the clipboard and clears, as in herdr.
     pub copy_on_select: bool,
+    /// A trackpad's pinch over a pane zooms it to fill its tab, and pinching in gives the tab back.
+    pub pinch_zoom: bool,
     /// The old switch for the cursor's trail: read once, as `cursor_effect` None when off, never written.
     #[serde(rename = "animated_cursor", skip_serializing)]
     legacy_animated_cursor: bool,
@@ -425,6 +427,7 @@ impl Default for Settings {
             notify_sound: true,
             dock_badge: true,
             copy_on_select: true,
+            pinch_zoom: true,
             legacy_animated_cursor: true,
             pane_style: PaneStyle::default(),
             highlight_active_pane: false,

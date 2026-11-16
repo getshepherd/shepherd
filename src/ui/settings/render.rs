@@ -140,6 +140,11 @@ impl Render for SettingsView {
                             |_, _: &ClickEvent, _, cx| update(cx, |s| s.copy_on_select = !s.copy_on_select),
                         )),
                     )
+                    .child(
+                        toggle_row(&theme, false, "pinch-zoom", "Pinch to zoom pane", "Pinch out on the trackpad over a pane to zoom it, pinch in to unzoom.", settings.pinch_zoom).on_click(cx.listener(
+                            |_, _: &ClickEvent, _, cx| update(cx, |s| s.pinch_zoom = !s.pinch_zoom),
+                        )),
+                    )
                     // Secure Keyboard Entry is macOS's
                     .when(cfg!(target_os = "macos"), |el| el.child(
                         toggle_row(&theme, false, "secure-input", "Secure keyboard entry", "While Shepherd is in front, other apps cannot read what you type.", settings.secure_input).on_click(cx.listener(
