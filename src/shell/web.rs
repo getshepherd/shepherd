@@ -116,7 +116,7 @@ pub(super) enum Favicon {
 }
 
 /// A page's key in [`crate::web::Seen`]: its entry's id, and its machine's after an `@`.
-fn seen_key(key: &PageKey) -> String {
+pub(super) fn seen_key(key: &PageKey) -> String {
     match &key.1 {
         Some(machine) => format!("{}@{machine}", key.0),
         None => key.0.clone(),
@@ -483,6 +483,7 @@ impl Shell {
         let browser = browser::is_tab(&key.0);
         let tab_id = browser.then(|| key.0.clone());
         let device = self.device_page_session(&key.0);
+        let instrumented = device.is_none();
         self.pages.made += 1;
         let serial = self.pages.made;
         let send = move |event: PageEvent| {
@@ -528,6 +529,11 @@ impl Shell {
         let builder = match device {
             Some((session, feed)) => super::device::three::attach(builder, session, feed, self.rt.clone(), move || ready(PageEvent::Ready)),
             None => new_tabs(builder, tab),
+        };
+        // every page but a 3D view keeps its requests and console lines for agents (`shepherd browser`)
+        let builder = match instrumented {
+            true => builder.with_initialization_script(crate::browser_agent::INSTRUMENT),
+            false => builder,
         };
         let builder = match dressed {
             Some(script) => builder.with_initialization_script(script),

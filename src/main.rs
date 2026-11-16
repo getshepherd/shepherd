@@ -10,6 +10,9 @@ fn main() {
     if args.first().is_some_and(|a| a == "device") {
         std::process::exit(shepherd::device::agent::cli(&args[1..]));
     }
+    if args.first().is_some_and(|a| a == "browser") {
+        std::process::exit(shepherd::browser_agent::cli(&args[1..]));
+    }
     if args.first().is_some_and(|a| a == "skill") {
         std::process::exit(shepherd::agent_skill::cli(&args[1..]));
     }
@@ -104,6 +107,7 @@ fn main() {
                             shell.show_review_tab(tab, window, cx);
                         }
                         (None, None, "browser") => shell.open_blank_tab(None, window, cx),
+                        (None, None, "browser-agent") => shell.show_agent_driving(window, cx),
                         (None, None, "browser-menu") => {
                             shell.open_blank_tab(None, window, cx);
                             shell.open_browser_menu(cx);

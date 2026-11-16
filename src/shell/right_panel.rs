@@ -375,6 +375,7 @@ impl Shell {
         let tab = |s: &Surface| {
             let (title, leading) = match s {
                 Surface::Browser(id) => (self.browser_label(id), match self.browser_chip(id) {
+                    _ if self.browser.driven_by(id).is_some() => Leading::Marks(vec![("icons/bot.svg", (theme.accent, theme.surface))]),
                     (_, true) => Leading::Spinner,
                     (Some(image), false) => Leading::Image(image),
                     (None, false) => mark("icons/solar/global.svg"),
@@ -457,6 +458,7 @@ impl Shell {
                     .flex_col()
                     .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, window, cx| this.focus_panel(true, window, cx)))
                     .child(bar)
+                    .children(self.render_agent_driving(&key.0, theme))
                     .child(page)
                     .into_any_element()
             }
