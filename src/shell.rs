@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 mod annotations;
 mod browser;
+mod browser_agent;
 mod changes;
 mod device;
 mod divider;
@@ -674,6 +675,7 @@ impl Shell {
                 shell.refresh_places(cx);
                 shell.refresh_plugin_actions(cx);
                 cx.set_global(browser::Links(cx.entity().downgrade()));
+                Shell::serve_browser_agents(window, cx);
                 // Waiting and idle times move on between snapshots.
                 // ponytail: a minute from launch, not from each wait, so a label can lag by up to a minute.
                 cx.spawn(async move |this, cx| loop {

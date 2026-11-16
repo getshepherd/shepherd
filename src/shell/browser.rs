@@ -122,7 +122,7 @@ pub(super) fn site(url: &str) -> Option<String> {
 
 /// What's typed in the address field, as a URL: `localhost:3000` gets `http://` and `example.com` `https://` (see
 /// `web::normalize`); anything with a space or without a dot or a port goes to a search.
-fn typed_url(text: &str) -> Option<String> {
+pub(super) fn typed_url(text: &str) -> Option<String> {
     let text = text.trim();
     if text.is_empty() {
         return None;

@@ -41,3 +41,21 @@ An agent that is blocked on a question or a permission: answer it if it is yours
 - Uncommitted changes or an unmerged branch: show them and ask. Force only with the user's consent.
 - Remove what you created for the current task. Others only when the user names them; to tidy up, list the merged,
   empty and prunable candidates and ask first.
+
+## Shepherd's browser
+
+Shepherd has a browser: tabs in each workspace's right panel, and pages in its sidebar. `shepherd browser` drives
+them from a pane on this Mac (not over SSH): `shepherd` below is the binary you ran `skill` with. Without `--tab <id>`
+a command goes to the browser tab this workspace shows in its right panel (else its last one); outside herdr, to the
+page the window shows. Use it to check a web app you are working on in the browser the user is looking at.
+
+- `shepherd browser tabs`: every tab and page as JSON: id, workspace, url, title, `shown`, `this_workspace`.
+- `shepherd browser eval '<js>'`: runs JavaScript in the page and prints the result (a string as is, else JSON). An
+  expression, or statements that `return` the value; `await` works. `-` reads the code from stdin.
+- `shepherd browser network`, then `network <n>` for a fetch/XHR request's body; `console` for its logs and errors.
+  Both record from the page's load: `reload` a page opened before to see its first requests.
+- `shepherd browser new <url>` opens a tab in this workspace (prints its id); `open <url>` loads one in the tab;
+  `reload`; `screenshot [<path>]` saves a PNG and prints its path.
+
+The pages are the user's, signed in to their accounts: read and test, and ask before anything that changes data on a
+site that isn't the app you are building.
