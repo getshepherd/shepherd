@@ -371,7 +371,18 @@ pub fn uninstall(ext: &Extension) -> Result<(), String> {
 
 /// `<binary> <args>`, or what it said when it failed.
 fn run(binary: &Path, args: &[&str]) -> Result<(), String> {
-    let out = crate::process::command(binary).args(args).stdin(Stdio::null()).output().map_err(|e| format!("{}: {e}", binary.display()))?;
+    let output = || crate::process::command(binary).args(args).stdin(Stdio::null()).output();
+    // A binary just written (install) can't run on Linux while a child another thread forked meanwhile still holds our
+    // write fd, until that child execs: ETXTBSY for a moment, so a few tries.
+    let mut out = output();
+    for _ in 0..20 {
+        if !matches!(&out, Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        out = output();
+    }
+    let out = out.map_err(|e| format!("{}: {e}", binary.display()))?;
     if out.status.success() {
         return Ok(());
     }
