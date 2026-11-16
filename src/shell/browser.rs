@@ -621,7 +621,7 @@ impl Shell {
 
 /// A button per Chrome extension with an action, left of the bar's own: a click runs it or opens its popup.
 #[cfg(target_os = "macos")]
-fn extension_buttons(theme: &Theme) -> Vec<Stateful<Div>> {
+pub(super) fn extension_buttons(theme: &Theme) -> Vec<Stateful<Div>> {
     let actions = crate::browser_extensions::actions();
     actions
         .into_iter()
@@ -642,7 +642,7 @@ fn extension_buttons(theme: &Theme) -> Vec<Stateful<Div>> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn extension_buttons(_: &Theme) -> Vec<Stateful<Div>> {
+pub(super) fn extension_buttons(_: &Theme) -> Vec<Stateful<Div>> {
     Vec::new()
 }
 

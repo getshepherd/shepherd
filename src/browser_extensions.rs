@@ -1,4 +1,4 @@
-//! Chrome extensions in the browser tabs: added in Settings → Extensions → Browser, from the Chrome Web Store (its CRX
+//! Chrome extensions in the browser tabs and sidebar pages: added in Settings → Extensions → Browser, from the Chrome Web Store (its CRX
 //! downloaded and unpacked into a folder beside the settings) or from a folder the user picks, and loaded into every
 //! browser tab by WebKit's own WebExtensions support (`WKWebExtensionController`, macOS 15.4 and later).
 //! The settings keep each one's folder and switch (`Settings::browser_extensions`); the rest is read from its manifest.

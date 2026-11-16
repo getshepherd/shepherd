@@ -507,9 +507,12 @@ impl Shell {
         // an extension's page wears Shepherd's theme from its first paint
         let dressed = crate::extensions::by_page(cx, &key.0).map(|ext| crate::extensions::theme_script(Theme::of(cx), &ext.origin()));
         let browser = browser::is_tab(&key.0);
-        let tab_id = browser.then(|| key.0.clone());
         let device = self.device_page_session(&key.0);
         let instrumented = device.is_none();
+        // Chrome extensions run in browser tabs and sidebar pages; a device's 3D view and an extension's own page
+        // (Shepherd's UI, themed by it) stay without them
+        let extended = device.is_none() && dressed.is_none();
+        let tab_id = extended.then(|| seen_key(&key));
         self.pages.made += 1;
         let serial = self.pages.made;
         let send = move |event: PageEvent| {
@@ -535,9 +538,8 @@ impl Shell {
             ),
             false => wry::WebViewBuilder::new(),
         };
-        // a browser tab runs the Chrome extensions switched on; sidebar pages and the 3D view stay without them
         #[cfg(target_os = "macos")]
-        let builder = match browser.then(|| crate::browser_extensions::configuration(cx)).flatten() {
+        let builder = match extended.then(|| crate::browser_extensions::configuration(cx)).flatten() {
             Some(config) => wry::WebViewBuilderExtMacos::with_webview_configuration(builder, config),
             None => builder,
         };
@@ -804,9 +806,11 @@ impl Shell {
             }
         }
         self.pages.links_outside.set(SettingsGlobal::of(cx).settings.web_links_outside);
-        // the browser tab the panel shows, or last showed, is the active one extensions act on (chrome.tabs, their
-        // buttons), as a Chrome window always has one
-        if let Some(crate::right_panel::Surface::Browser(id)) = self.panel().and_then(|p| p.active.as_ref()) {
+        // the sidebar page shown, else the browser tab the panel shows or last showed, is the active one extensions
+        // act on (chrome.tabs, their buttons), as a Chrome window always has one
+        if let Some((key, _)) = self.shown_page(cx) {
+            crate::browser_extensions::activate_tab(&seen_key(&key));
+        } else if let Some(crate::right_panel::Surface::Browser(id)) = self.panel().and_then(|p| p.active.as_ref()) {
             crate::browser_extensions::activate_tab(id);
         }
         #[cfg(target_os = "macos")]
@@ -1027,6 +1031,7 @@ impl Shell {
             .child(nav_button(theme, view.clone(), "web-forward", "icons/solar/alt-arrow-right.svg", can(wry::WebView::can_go_forward), wry::WebView::go_forward))
             .child(self.reload_button(key, "web-reload", theme, cx))
             .child(div().ml(px(6.)).flex_1().min_w_0().truncate().text_color(theme.text_muted).child(title))
+            .when(crate::extensions::by_page(cx, &key.0).is_none(), |el| el.children(browser::extension_buttons(theme)))
     }
 
     /// Page `key`'s reload button: one turn clockwise on a spring, shrinking a little as it sets off, after a reload.
