@@ -4,7 +4,7 @@
 //! answered. The window's side of each command is `shell::browser_agent`; what records requests and console lines in
 //! the page is `INSTRUMENT`, a script every page gets before its own run.
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::Read;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -138,6 +138,7 @@ pub fn cli(args: &[String]) -> i32 {
 
 #[cfg(unix)]
 fn ask(request: &Request) -> Result<Reply, String> {
+    use std::io::Write;
     use std::os::unix::net::UnixStream;
     let path = socket();
     let mut stream = UnixStream::connect(&path).map_err(|e| format!("Shepherd isn't running, or is older than this command ({}: {e})", path.display()))?;
@@ -163,6 +164,7 @@ pub type Asked = (Request, futures::channel::oneshot::Sender<Reply>);
 /// sender. Another Shepherd already answering there keeps it: this one serves nothing.
 #[cfg(unix)]
 pub fn serve(asked: futures::channel::mpsc::UnboundedSender<Asked>) {
+    use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::{UnixListener, UnixStream};
     let path = socket();
     if UnixStream::connect(&path).is_ok() {
