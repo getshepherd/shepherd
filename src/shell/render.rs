@@ -64,6 +64,20 @@ impl Render for Shell {
             (Some(s), Some(t)) => (s.pane_frames(&t.tab_id), s.split_frames(&t.tab_id)),
             _ => (Vec::new(), Vec::new()),
         };
+        if let (Some(s), Some(t)) = (&snapshot, &tab) {
+            let zoomed = s.layouts.iter().any(|l| l.tab_id == t.tab_id && l.zoomed);
+            if let Some(m) = ZoomMotion::follow(&mut self.zoom_seen, &t.tab_id, zoomed, &frames).filter(|_| !cx.reduce_motion()) {
+                self.zoom_motion = Some(m);
+            }
+        }
+        // a zoom on its way: the pane between its place and the whole tab, over the others, and no dividers meanwhile
+        match self.zoom_motion.as_ref().filter(|m| tab.as_ref().is_some_and(|t| t.tab_id == m.tab_id)).map(|m| m.frames(Instant::now())) {
+            Some(Some(moving)) => {
+                (frames, splits) = (moving, Vec::new());
+                window.request_animation_frame();
+            }
+            _ => self.zoom_motion = None,
+        }
         // herdr caught up with a released divider: its snapshot is the layout again.
         if let Some((path, ratio)) = &self.settling
             && splits.iter().any(|s| &s.path == path && (s.ratio - ratio).abs() < 0.02)
@@ -193,6 +207,11 @@ impl Render for Shell {
         }
         // the layer in front, which a click on another one's pane raises over it
         let front = frames.iter().rev().find_map(|f| f.layer.clone());
+        // a zooming pane's terminal keeps the size it had, in pixels, until it arrives: the cell moves and clips it
+        let held = self.zoom_motion.as_ref().and_then(ZoomMotion::held).zip(self.grid_bounds.get()).map(|((id, f), grid)| {
+            let gap = px(if comfortable { PANE_GAP } else { 0. });
+            (id.to_string(), gpui::size(grid.size.width * f.w - gap, grid.size.height * f.h - gap))
+        });
         // a pane's cell: the split's go under its dividers, the floating ones over them
         let pane_cell = |f: PaneFrame| -> gpui::AnyElement {
             let cell = div()
@@ -245,7 +264,15 @@ impl Render for Shell {
                             .size_full()
                             .relative()
                             .when(floats, |el| el.rounded(corner_r).shadow_lg().overflow_hidden())
-                            .child(pane.clone().cached(gpui::StyleRefinement::default().size_full()))
+                            .child(match held.as_ref().filter(|(id, _)| id == &f.pane_id) {
+                                Some((_, size)) => div()
+                                    .size_full()
+                                    .overflow_hidden()
+                                    .bg(theme.terminal.background)
+                                    .child(div().flex_none().w(size.width).h(size.height).child(pane.clone().cached(gpui::StyleRefinement::default().size_full())))
+                                    .into_any_element(),
+                                None => pane.clone().cached(gpui::StyleRefinement::default().size_full()).into_any_element(),
+                            })
                             // the pane at 60%: its background over it, not `opacity`, which a cached pane's
                             // replayed frame may not pick up
                             .when(dimmed, |el| el.child(div().absolute().inset_0().rounded(corner_r).bg(theme.terminal.background.opacity(1. - INACTIVE_PANE))))

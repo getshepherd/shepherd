@@ -166,6 +166,61 @@ impl FoldMotion {
     }
 }
 
+/// How long a pane's [`spring`] takes to grow it to fill its tab, or to take it back.
+pub(super) const ZOOM_DURATION: Duration = Duration::from_millis(340);
+
+/// A pane zooming (`grow`) from its place in the split to the whole tab, or unzooming back to it.
+pub(super) struct ZoomMotion {
+    pub(super) tab_id: String,
+    pane_id: String,
+    /// The tab's unzoomed frames: where the pane goes back to, and the panes it covers on the way.
+    split: Vec<crate::model::PaneFrame>,
+    grow: bool,
+    at: Instant,
+}
+
+impl ZoomMotion {
+    /// Seen at a render: the tab `tab_id` with a pane filling it (`zoomed`) or not, and its `frames`, against what the
+    /// last render showed (`seen`, which this updates). A change of zoom in the same tab starts the motion.
+    pub(super) fn follow(seen: &mut Option<(String, bool, Vec<crate::model::PaneFrame>)>, tab_id: &str, zoomed: bool, frames: &[crate::model::PaneFrame]) -> Option<Self> {
+        let (last_tab, was, before) = seen.replace((tab_id.to_string(), zoomed, frames.to_vec()))?;
+        if last_tab != tab_id || was == zoomed {
+            return None;
+        }
+        // the zoomed layout is the one pane alone; the other is the split it sits in
+        let (split, pane_id) = if zoomed { (before, frames.first()?.pane_id.clone()) } else { (frames.to_vec(), before.first()?.pane_id.clone()) };
+        split.iter().any(|f| f.pane_id == pane_id).then(|| ZoomMotion { tab_id: tab_id.to_string(), pane_id, split, grow: zoomed, at: Instant::now() })
+    }
+
+    /// The tab's frames now, the pane over the others; `None` once it has arrived.
+    pub(super) fn frames(&self, now: Instant) -> Option<Vec<crate::model::PaneFrame>> {
+        let t = now.saturating_duration_since(self.at).as_secs_f32() / ZOOM_DURATION.as_secs_f32();
+        (t < 1.).then(|| self.frames_at(spring(t)))
+    }
+
+    /// The moving pane and the frame its terminal keeps meanwhile, the one it had: it is resized once, on arrival,
+    /// not on every frame.
+    pub(super) fn held(&self) -> Option<(&str, crate::model::Frac)> {
+        let place = self.split.iter().find(|f| f.pane_id == self.pane_id)?.frame;
+        let full = crate::model::Frac { x: 0., y: 0., w: 1., h: 1. };
+        Some((&self.pane_id, if self.grow { place } else { full }))
+    }
+
+    fn frames_at(&self, t: f32) -> Vec<crate::model::PaneFrame> {
+        use crate::model::Frac;
+        let p = if self.grow { t } else { 1. - t };
+        let (mut frames, pane): (Vec<_>, Vec<_>) = self.split.iter().cloned().partition(|f| f.pane_id != self.pane_id);
+        let mix = |a: f32, b: f32| a + (b - a) * p;
+        frames.extend(pane.into_iter().map(|mut f| {
+            let place = f.frame;
+            f.frame = Frac { x: mix(place.x, 0.), y: mix(place.y, 0.), w: mix(place.w, 1.), h: mix(place.h, 1.) };
+            f.focused = true;
+            f
+        }));
+        frames
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +262,25 @@ mod tests {
         assert_eq!(ease_out(1.), 1.);
         // CSS ease-out at x = 0.5 is ≈ 0.684
         assert!((ease_out(0.5) - 0.684).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_pane_grows_from_its_place_over_the_others_and_back() {
+        use crate::model::{Frac, PaneFrame};
+        let frame = |id: &str, x: f32| PaneFrame { pane_id: id.into(), frame: Frac { x, y: 0., w: 0.5, h: 1. }, focused: false, layer: None };
+        let split = vec![frame("a", 0.), frame("b", 0.5)];
+        let mut seen = None;
+        assert!(ZoomMotion::follow(&mut seen, "t", false, &split).is_none(), "nothing seen before");
+        let full = vec![PaneFrame { pane_id: "a".into(), frame: Frac { x: 0., y: 0., w: 1., h: 1. }, focused: true, layer: None }];
+        assert!(ZoomMotion::follow(&mut seen.clone().map(|(_, z, f)| ("u".into(), z, f)), "t", true, &full).is_none(), "another tab");
+        let grow = ZoomMotion::follow(&mut seen, "t", true, &full).expect("zooms");
+        let start = grow.frames_at(0.);
+        assert_eq!(start.iter().map(|f| f.pane_id.as_str()).collect::<Vec<_>>(), ["b", "a"], "over the other");
+        assert_eq!(start[1].frame, split[0].frame);
+        assert_eq!(grow.frames_at(1.)[1].frame, full[0].frame);
+        let back = ZoomMotion::follow(&mut seen, "t", false, &split).expect("unzooms");
+        assert_eq!((back.frames_at(0.)[1].frame, back.frames_at(1.)[1].frame), (full[0].frame, split[0].frame));
+        assert_eq!(back.held().map(|(id, f)| (id.to_string(), f)), Some(("a".into(), full[0].frame)), "the terminal keeps its size");
+        assert!(ZoomMotion::follow(&mut seen, "t", false, &split).is_none(), "no change");
     }
 }
