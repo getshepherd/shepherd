@@ -1162,7 +1162,13 @@ pub fn capture(dir: &str, base_ref: Option<&str>) -> Result<CheckoutDiff, String
     let root = repo_root(dir)?;
     let head = run(dir, &at_root(&root, &["rev-parse", "--verify", "HEAD"])).ok().map(line);
     let base = match base_ref {
-        Some(base) => line(run(dir, &at_root(&root, &["merge-base", base, "HEAD"]))?),
+        // A local base can lag its upstream that the branch was cut from (`git switch -c x origin/develop` with an old
+        // `develop`): the newest commit HEAD shares with either is the base, or the upstream's new commits count as
+        // the branch's. A base with no upstream (a remote branch, a sha) makes the first call fail.
+        Some(base) => line(
+            run(dir, &at_root(&root, &["merge-base", "HEAD", base, &format!("{base}@{{upstream}}")]))
+                .or_else(|_| run(dir, &at_root(&root, &["merge-base", base, "HEAD"])))?,
+        ),
         None => head.clone().unwrap_or_else(|| EMPTY_TREE_SHA.to_string()),
     };
     let mut diff = at_root(&root, &DIFF);
@@ -2444,6 +2450,18 @@ rename to new_name.rs
         let said = commit_all(dir, "More").unwrap_err();
         assert!(said.contains("lint failed"), "{said}");
         assert!(!capture(dir, None).unwrap().patch.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_branch_cut_from_a_newer_origin_than_its_local_base_shows_only_its_own_files() {
+        let upstream = repo();
+        let clone = tempfile::tempdir().unwrap();
+        sh(clone.path(), &format!("git clone -q {} .", upstream.path().display()));
+        sh(upstream.path(), "printf 'theirs\n' > t.txt && git add -A && git commit -qm theirs");
+        sh(clone.path(), "git fetch -q && git switch -qc feature origin/main && printf 'mine\n' > f.txt && git add -A && git -c user.email=t@t -c user.name=t commit -qm mine");
+        let (_, files) = take(&clone, Some("main"));
+        assert_eq!(files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["f.txt"]);
     }
 
     #[cfg(unix)]
