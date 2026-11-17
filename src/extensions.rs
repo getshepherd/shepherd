@@ -101,6 +101,16 @@ impl Extension {
         format!("{}/?token={}", self.origin(), self.token)
     }
 
+    /// Its page at `at` (where it is now) with the token, so the server lets it in without the cookie; its front
+    /// page when `at` is somewhere else.
+    pub fn url_at(&self, at: Option<String>) -> String {
+        match at.filter(|u| u.starts_with(&format!("{}/", self.origin()))) {
+            Some(u) if u.contains("token=") => u,
+            Some(u) => format!("{u}{}token={}", if u.contains('?') { '&' } else { '?' }, self.token),
+            None => self.url(),
+        }
+    }
+
     /// Whether it is listed in the sidebar, its page in place of the panes.
     pub fn in_sidebar(&self) -> bool {
         self.show.is_empty() || self.show.iter().any(|s| s == "sidebar")
@@ -728,6 +738,10 @@ mod tests {
         assert!(found[0].runs_with_shepherd());
         assert_eq!(found[1].start, "login");
         assert_eq!(found[0].url(), "http://127.0.0.1:5000/?token=t");
+        assert_eq!(found[0].url_at(Some("http://127.0.0.1:5000/".into())), "http://127.0.0.1:5000/?token=t");
+        assert_eq!(found[0].url_at(Some("http://127.0.0.1:5000/a?b=1".into())), "http://127.0.0.1:5000/a?b=1&token=t");
+        assert_eq!(found[0].url_at(Some("http://127.0.0.1:50001/".into())), "http://127.0.0.1:5000/?token=t");
+        assert_eq!(found[0].url_at(None), "http://127.0.0.1:5000/?token=t");
         assert!(found[0].in_panel() && !found[0].in_sidebar(), "where it says it shows");
         assert!(found[1].in_panel() && found[1].in_sidebar(), "both when it doesn't say");
     }

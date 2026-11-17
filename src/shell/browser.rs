@@ -372,7 +372,7 @@ impl Shell {
     }
 
     /// Tab `id`'s page loaded again bypassing the cache (WebKit's reload from origin).
-    fn hard_reload(&mut self, id: &str) {
+    fn hard_reload(&mut self, id: &str, _cx: &App) {
         let key: PageKey = (id.to_string(), None);
         #[cfg(target_os = "macos")]
         if let Some(page) = self.pages.live.get(&key) {
@@ -380,7 +380,7 @@ impl Shell {
         }
         // ponytail: WebKitGTK's plain reload, which wry alone reaches; its bypass-cache one when someone asks
         #[cfg(not(target_os = "macos"))]
-        self.reload_page(&key);
+        self.reload_page(&key, _cx);
     }
 
     /// Tab `id`'s page zoomed to `zoom`.
@@ -517,7 +517,7 @@ impl Shell {
                 this.close_browser_menu();
                 cx.notify();
             }))
-            .child(item("browser-hard-reload", "icons/solar/restart.svg", "Hard reload", url.is_some(), Box::new(move |this, _, _| this.hard_reload(&reload))))
+            .child(item("browser-hard-reload", "icons/solar/restart.svg", "Hard reload", url.is_some(), Box::new(move |this, _, cx| this.hard_reload(&reload, cx))))
             .child(
                 item(
                     "browser-devtools",

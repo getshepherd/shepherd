@@ -1083,7 +1083,7 @@ impl Shell {
                 .on_mouse_up(MouseButton::Left, cx.listener(released))
                 .on_mouse_up_out(MouseButton::Left, cx.listener(released))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.reload_page(&key);
+                    this.reload_page(&key, cx);
                     cx.notify();
                 }))
             })
@@ -1104,7 +1104,7 @@ impl Shell {
                     Ok(()) if up => {
                         let keys: Vec<PageKey> =
                             this.pages.live.keys().filter(|k| crate::extensions::by_page(cx, &k.0).is_some_and(|e| e.name == name)).cloned().collect();
-                        keys.iter().for_each(|k| this.reload_page(k));
+                        keys.iter().for_each(|k| this.reload_page(k, cx));
                     }
                     Ok(()) => {}
                     Err(why) => crate::ui::toast::error(cx, why),
@@ -1169,9 +1169,18 @@ impl Shell {
     }
 
     /// Reloads page `key`, its spinner shown at once.
-    pub(super) fn reload_page(&mut self, key: &PageKey) {
+    pub(super) fn reload_page(&mut self, key: &PageKey, cx: &App) {
         if let Some(page) = self.pages.live.get_mut(key) {
-            let _ = page.view.reload();
+            // An extension's page loads again with its token, at the address it is on: the cookie the token set can
+            // be gone by now (it lives as long as WebKit's session), and the page's address alone then gets 401.
+            match crate::extensions::by_page(cx, &key.0) {
+                Some(ext) => {
+                    let _ = page.view.load_url(&ext.url_at(page_url(&page.view)));
+                }
+                None => {
+                    let _ = page.view.reload();
+                }
+            }
             page.loading = true;
             page.reloaded = Some(Instant::now());
         }
@@ -1180,7 +1189,7 @@ impl Shell {
     /// The shown page reloaded (⌘R).
     pub(super) fn reload_shown_page(&mut self, window: &Window, cx: &mut Context<Self>) {
         if let Some(key) = self.visible_page(window, cx) {
-            self.reload_page(&key);
+            self.reload_page(&key, cx);
             cx.notify();
         }
     }
@@ -1249,7 +1258,7 @@ impl Shell {
             // a page not opened yet has nothing to reload or unload
             .children(loaded.then(|| {
                 let key = key.clone();
-                item("web-menu-reload", "Reload", Box::new(move |this, _, _| this.reload_page(&key)))
+                item("web-menu-reload", "Reload", Box::new(move |this, _, cx| this.reload_page(&key, cx)))
             }))
             .children(loaded.then(|| {
                 item("web-menu-unload", "Unload", Box::new(move |this, _, _| this.unload_page(&key)))

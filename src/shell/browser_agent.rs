@@ -68,7 +68,7 @@ impl Shell {
                 }))
             }
             Command::Reload => {
-                self.reload_page(&key);
+                self.reload_page(&key, cx);
                 cx.notify();
                 drop(reply.send(Reply::ok(format!("{id}: reloading"))));
             }
