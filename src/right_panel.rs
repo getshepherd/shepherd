@@ -166,10 +166,16 @@ impl PanelState {
     }
 }
 
-/// Whether a visible page holds the keyboard: a sidebar page has the window to itself, a panel page beside the panes
-/// only once it's asked to, and `popup` (a menu, the address field, a note) keeps it from either.
-pub fn page_takes_keyboard(sidebar_page: bool, focus_in_panel: bool, popup: bool) -> bool {
-    (sidebar_page || focus_in_panel) && !popup
+/// The visible page that holds the keyboard: the panel's once it's asked to, else a sidebar page, which stands in for
+/// the panes; `popup` (a menu, the address field, a note) keeps it from either.
+pub fn keyboard_page<'a, K>(sidebar: Option<&'a K>, panel: Option<&'a K>, focus_in_panel: bool, popup: bool) -> Option<&'a K> {
+    if popup {
+        None
+    } else if focus_in_panel {
+        panel
+    } else {
+        sidebar
+    }
 }
 
 /// What the picker and the `+` list.

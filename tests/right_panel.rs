@@ -151,12 +151,15 @@ fn a_tab_strip_key_comes_back_as_its_surface() {
 
 #[test]
 fn a_visible_page_keeps_its_hands_off_the_keyboard_until_asked() {
-    use shepherd::right_panel::page_takes_keyboard as takes;
-    assert!(takes(true, false, false)); // a sidebar page has the window to itself, as today
-    assert!(!takes(false, false, false)); // a panel page beside a terminal
-    assert!(takes(false, true, false)); // clicked into
-    assert!(!takes(false, true, true)); // a popup, the address field or a note holds it
-    assert!(!takes(true, false, true));
+    use shepherd::right_panel::keyboard_page as takes;
+    let (page, tab) = ("page", "tab");
+    assert_eq!(takes(Some(&page), None, false, false), Some(&page)); // a sidebar page stands in for the panes
+    assert_eq!(takes(None, Some(&tab), false, false), None); // a panel page beside a terminal
+    assert_eq!(takes(None, Some(&tab), true, false), Some(&tab)); // clicked into
+    assert_eq!(takes(Some(&page), Some(&tab), false, false), Some(&page)); // a page and the panel beside it
+    assert_eq!(takes(Some(&page), Some(&tab), true, false), Some(&tab));
+    assert_eq!(takes(Some(&page), None, true, false), None); // the panel's diff has it
+    assert_eq!(takes(Some(&page), Some(&tab), true, true), None); // a popup, the address field or a note holds it
 }
 
 #[test]

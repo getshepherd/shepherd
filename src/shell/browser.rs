@@ -165,20 +165,21 @@ impl Shell {
         cx.notify();
     }
 
-    /// A link asked for in a new tab from page `key`: a browser tab behind the one shown, in the workspace of the
-    /// page's tab, else (a sidebar page's) the workspace shown, its panel showing it once the page is left.
-    pub(super) fn open_behind(&mut self, key: &PageKey, url: String, window: &mut Window, cx: &mut Context<Self>) {
+    /// A link asked for in a new tab from page `key`: a browser tab in the workspace of the page's tab, else (a
+    /// sidebar page's) the workspace shown, in its panel beside the page. One a browser tab ⌘-clicks (`behind`) stays
+    /// behind the tab shown, as in a browser.
+    pub(super) fn open_tab(&mut self, key: &PageKey, url: String, behind: bool, window: &mut Window, cx: &mut Context<Self>) {
         let from_tab = self.browser.tabs.iter().find(|t| t.id == key.0).map(|t| t.workspace.clone());
         let Some(ws) = from_tab.clone().or_else(|| self.shown_tab().map(|t| t.workspace_id)) else {
             return crate::ui::open_outside(&url, cx);
         };
         let was = self.right.panels.get(&ws).and_then(|p| p.active.clone());
         self.new_browser_tab(ws.clone(), Some(url), false, window, cx);
-        if let (Some(was), Some(panel)) = (was, self.right.panels.get_mut(&ws)) {
+        if behind
+            && from_tab.is_some()
+            && let (Some(was), Some(panel)) = (was, self.right.panels.get_mut(&ws))
+        {
             panel.activate(&was);
-        }
-        if from_tab.is_none() {
-            crate::ui::toast::info(cx, "Opened in a browser tab", None);
         }
     }
 

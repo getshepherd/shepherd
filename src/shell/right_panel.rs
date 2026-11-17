@@ -160,9 +160,9 @@ impl Shell {
         }
     }
 
-    /// Whether the window can show a panel: Settings and a sidebar page not in its place, and room for it.
+    /// Whether the window can show a panel: Settings not in its place, and room for it. A sidebar page keeps it beside.
     fn right_panel_fits(&self, window: &Window) -> bool {
-        self.settings.is_none() && self.pages.shown.is_none() && fits(f32::from(window.viewport_size().width), self.sidebar_now())
+        self.settings.is_none() && fits(f32::from(window.viewport_size().width), self.sidebar_now())
     }
 
     fn right_panel_open(&self) -> bool {

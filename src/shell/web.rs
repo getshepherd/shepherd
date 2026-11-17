@@ -51,10 +51,10 @@ pub(super) enum PageEvent {
     Title(String),
     /// A load started (true) or finished: back and forward may have changed.
     Load(bool),
-    /// A new window asked for: it loads in the page instead.
-    Navigate(String),
-    /// A link ⌘-clicked (Ctrl off macOS) or middle-clicked, for a browser tab of its own.
-    NewTab(String),
+    /// A link for a browser tab of its own: ⌘-clicked (Ctrl off macOS) or middle-clicked, which a browser tab keeps
+    /// behind it (true), or a new window asked for (`window.open`, `target=_blank`, the link menu's Open Link in New
+    /// Tab), which comes to the front.
+    NewTab(String, bool),
     /// A link to another site, for the system browser.
     Outside(String),
     /// A `shepherd://review` link: the PR of a branch, by a checkout of its repository, for the review panel.
@@ -342,13 +342,18 @@ impl Shell {
         self.browser.entries().chain(self.device_pages(Theme::of(cx))).chain(extensions)
     }
 
-    /// The page on screen and its entry: a sidebar page's, else the panel's. Never both: a sidebar page hides the panel.
+    /// The page on screen and its entry: with the keyboard in the panel, the panel's first, else a sidebar page's
+    /// first. Both can be on screen, a sidebar page with the panel beside it.
     fn visible_entry(&self, window: &Window, cx: &App) -> Option<(PageKey, WebEntry)> {
-        self.shown_page(cx).or_else(|| {
+        let panel = || {
             let key = self.panel_page(window)?;
             let entry = self.panel_entries(cx).find(|e| e.id == key.0)?;
             Some((key, entry))
-        })
+        };
+        match self.panel_focused() {
+            true => panel().or_else(|| self.shown_page(cx)),
+            false => self.shown_page(cx).or_else(panel),
+        }
     }
 
     pub(super) fn visible_page(&self, window: &Window, cx: &App) -> Option<PageKey> {
@@ -529,7 +534,7 @@ impl Shell {
         let follows_outside: Rc<dyn Fn(&str) -> bool> = Rc::new(move |to| !browser && flag.get() && off_site(&site, to));
         let opens_outside = follows_outside.clone();
         let tabs_outside = follows_outside.clone();
-        let tab = move |to: String| tabbed(if tabs_outside(&to) { PageEvent::Outside(to) } else { PageEvent::NewTab(to) });
+        let tab = move |to: String| tabbed(if tabs_outside(&to) { PageEvent::Outside(to) } else { PageEvent::NewTab(to, true) });
         // WebKitGTK takes a scheme once per context: a 3D view, which keeps nothing between launches, has its own
         let shared = cfg!(not(target_os = "macos")) && !(cfg!(target_os = "linux") && device.is_some());
         let builder = match shared {
@@ -605,7 +610,7 @@ impl Shell {
                     reviewed_new(PageEvent::Review { dir, branch });
                     return wry::NewWindowResponse::Deny;
                 }
-                let event = if opens_outside(&to) { PageEvent::Outside(to) } else { PageEvent::Navigate(to) };
+                let event = if opens_outside(&to) { PageEvent::Outside(to) } else { PageEvent::NewTab(to, false) };
                 opened(event);
                 wry::NewWindowResponse::Deny
             })
@@ -614,6 +619,8 @@ impl Shell {
         if pinch_zooms {
             host::allow_magnification(&view);
         }
+        #[cfg(target_os = "macos")]
+        host::name_new_tab_item(&view);
         // GPUI's deferred layer goes on a plane of its own above native views (macOS only, in this GPUI); the page
         // moves into a view of its own below it. Without it, the page hides under Shepherd's overlays instead.
         #[cfg(target_os = "macos")]
@@ -759,12 +766,7 @@ impl Shell {
                     window.focus(&self.focus, cx);
                 }
             }
-            PageEvent::Navigate(url) => {
-                if let Err(e) = page.view.load_url(&url) {
-                    crate::ui::toast::error(cx, format!("{url}: {e}"));
-                }
-            }
-            PageEvent::NewTab(url) => return self.open_behind(&key, url, window, cx),
+            PageEvent::NewTab(url, behind) => return self.open_tab(&key, url, behind, window, cx),
             // every 100 ms while picking: nothing below is for it
             PageEvent::Picked(result) => return self.annotation_polled(&key, &result, window, cx),
             PageEvent::Ready => self.device_page_ready(&key.0),
@@ -788,7 +790,7 @@ impl Shell {
     }
 
     /// Once per render: `SHEPHERD_WEB` shown at launch, once the place shown lists it; pages whose entry went or whose URL changed dropped; the shown
-    /// one cleared when the place shown doesn't list it; only the shown page visible, and not while `covered`.
+    /// one cleared when the place shown doesn't list it; only the pages shown visible (a sidebar page and the panel's), and not while `covered`.
     pub(super) fn sync_pages(&mut self, covered: bool, window: &mut Window, cx: &mut Context<Self>) {
         if !self.pages.hooked
             && let Ok(name) = std::env::var("SHEPHERD_WEB")
@@ -852,32 +854,35 @@ impl Shell {
             self.release_panel();
             cx.notify();
         }
-        let shown = self.visible_page(window, cx);
-        // the page shown has no web view and no forward under its key now (the machine shown changed under it, its web
+        let sidebar = self.shown_page(cx).map(|(key, _)| key);
+        let panel = self.panel_page(window);
+        // a page shown has no web view and no forward under its key now (the machine shown changed under it, its web
         // view dropped): one is made, as a click makes it; a browser tab that can't have one closes
-        if let Some(key) = &shown
-            && !self.pages.live.contains_key(key)
-            && !self.pages.forwards.contains_key(key)
-            && !self.ensure_page(&key.0, window, cx)
-            && browser::is_tab(&key.0)
-        {
-            self.close_browser_tab(&key.0, cx);
+        for key in sidebar.iter().chain(&panel) {
+            if !self.pages.live.contains_key(key)
+                && !self.pages.forwards.contains_key(key)
+                && !self.ensure_page(&key.0, window, cx)
+                && browser::is_tab(&key.0)
+            {
+                self.close_browser_tab(&key.0, cx);
+            }
         }
         // the address field or a note being typed in keeps the keyboard too
         let popup = self.popup_open() || self.browser.editing() || self.note_focused(window, cx);
         // the page that takes the keyboard takes it after the others let go: `focus_parent` would take it back
         let mut takes = None;
-        // a blank browser tab lists the ports in its page's place
-        let ports = shown.as_ref().is_some_and(|k| self.shows_home(k));
+        let keyboard = crate::right_panel::keyboard_page(sidebar.as_ref(), panel.as_ref(), self.panel_focused(), popup).cloned();
         // a device's 3D view shows once its device is drawn: its loader stands in until then
         let drawing = self.device_pages_drawing();
+        // a blank browser tab lists the ports in its page's place
+        let shown: Vec<PageKey> = sidebar.into_iter().chain(panel).filter(|k| !self.shows_home(k)).collect();
         for (key, page) in &mut self.pages.live {
             // WebKit's own word, which also ends a load that failed before it began (no Finished comes for one)
             #[cfg(target_os = "macos")]
             {
                 page.loading = host::loading(&page.view);
             }
-            let visible = shown.as_ref() == Some(key) && !covered && !ports && !drawing.contains(&key.0);
+            let visible = shown.contains(key) && !covered && !drawing.contains(&key.0);
             if page.visible != visible {
                 page.visible = visible;
                 let _ = page.view.set_visible(visible);
@@ -892,7 +897,7 @@ impl Shell {
                 }
             }
             // the keyboard goes with the page, to a menu or dialog open over it, and back to Shepherd when it hides
-            let focused = visible && crate::right_panel::page_takes_keyboard(self.pages.shown.is_some(), self.right.focused.is_some(), popup);
+            let focused = visible && keyboard.as_ref() == Some(key);
             if page.focused != focused {
                 page.focused = focused;
                 match focused {
@@ -1552,6 +1557,41 @@ mod host {
     pub(super) fn allow_magnification(view: &wry::WebView) {
         // SAFETY: `setAllowsMagnification:` on a live WKWebView, on the main thread
         let () = unsafe { msg_send![&*view.webview(), setAllowsMagnification: true] };
+    }
+
+    /// WebKit's menu on a link offers Open Link in New Window, which comes to the new-window handler as `window.open`
+    /// does, and Shepherd opens a tab for it: the item says so. Added once to wry's web view class, which has no
+    /// `willOpenMenu:withEvent:` of its own, over WKWebView's.
+    pub(super) fn name_new_tab_item(view: &wry::WebView) {
+        use objc2::runtime::{AnyClass, Imp, Sel};
+        use objc2::{class, sel};
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        unsafe extern "C-unwind" fn will_open(this: &AnyObject, _: Sel, menu: &AnyObject, event: &AnyObject) {
+            // SAFETY: WKWebView's own, on the menu and event AppKit passed; the menu's items, on the main thread
+            unsafe {
+                let () = msg_send![super(this, class!(WKWebView)), willOpenMenu: menu, withEvent: event];
+                let items: Retained<objc2_foundation::NSArray<AnyObject>> = msg_send![menu, itemArray];
+                for item in items.iter() {
+                    let id: Option<Retained<objc2_foundation::NSString>> = msg_send![&*item, identifier];
+                    if id.is_some_and(|id| id.to_string() == "WKMenuItemIdentifierOpenLinkInNewWindow") {
+                        let () = msg_send![&*item, setTitle: &*objc2_foundation::NSString::from_str("Open Link in New Tab")];
+                    }
+                }
+            }
+        }
+        let class: &AnyClass = view.webview().class();
+        ONCE.call_once(|| {
+            let imp: unsafe extern "C-unwind" fn(&AnyObject, Sel, &AnyObject, &AnyObject) = will_open;
+            // SAFETY: a method of the types its encoding says (void; self, _cmd, two objects), on wry's own class
+            unsafe {
+                objc2::ffi::class_addMethod(
+                    class as *const AnyClass as *mut AnyClass,
+                    sel!(willOpenMenu:withEvent:),
+                    std::mem::transmute::<unsafe extern "C-unwind" fn(&AnyObject, Sel, &AnyObject, &AnyObject), Imp>(imp),
+                    c"v@:@@".as_ptr(),
+                );
+            }
+        });
     }
 
     /// Whether WKWebView has an address yet (its `URL` is nil before a load commits).

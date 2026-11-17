@@ -118,10 +118,9 @@ impl Shell {
     }
 
     /// Shows the PR of `branch`, in the checkout at `dir`, in the review panel: what a `shepherd://review` link in a
-    /// page asks for (the pull-requests extension's rows), until another pane is shown. A sidebar page hides the panel,
-    /// so the link leaves it for the tabs shown before it, as picking a tab does.
+    /// page asks for (the pull-requests extension's rows), until another pane is shown. A sidebar page stays, with
+    /// the panel beside it.
     pub(super) fn pick_review(&mut self, dir: String, branch: String, window: &Window, cx: &mut Context<Self>) {
-        self.pages.shown = None;
         self.review_pick = Some((self.active_pane(window, cx), dir, branch));
         self.review_tab = Tab::Summary;
         self.update_panel(cx, |p| p.add(crate::right_panel::Surface::PullRequest));
