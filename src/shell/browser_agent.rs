@@ -54,6 +54,15 @@ impl Shell {
             Ok(key) => key,
             Err(e) => return drop(reply.send(Reply::err(e))),
         };
+        if command == Command::Close {
+            let id = seen_key(&key);
+            return drop(reply.send(if key.1.is_none() && self.browser.tabs.iter().any(|t| t.id == key.0) {
+                self.close_browser_tab(&key.0, cx);
+                Reply::ok(format!("{id}: closed"))
+            } else {
+                Reply::err(format!("{id} is not a browser tab: only those close, not a sidebar page or an extension's tab"))
+            }));
+        }
         let Some(page) = self.pages.live.get(&key) else { return drop(reply.send(Reply::err("the tab has no page"))) };
         let view = Rc::downgrade(&page.view);
         let id = seen_key(&key);
@@ -82,7 +91,7 @@ impl Shell {
                 let path = path.map_or_else(|| crate::settings::cache_dir().join("shots").join(format!("{id}-{stamp}.png")), |p| request.cwd.join(p));
                 screenshot(&page.view, path, reply);
             }
-            Command::Tabs | Command::New(_) => unreachable!("answered above"),
+            Command::Tabs | Command::New(_) | Command::Close => unreachable!("answered above"),
         }
     }
 

@@ -17,6 +17,8 @@ which tab you drive: it is marked for a few seconds after each command.
   open <url>               Loads the URL in the tab.
   new <url>                A new browser tab in this workspace, on the URL; prints its id.
   reload                   Reloads the tab.
+  close                    Closes the tab: a browser tab only, not a sidebar page or an extension's tab. Close
+                           the tabs you opened with `new` once you are done with them.
   screenshot [<path>]      The page as a PNG (macOS); prints the path.
 
 Requests and console lines are recorded from the page's load: reload a page opened earlier to see its first ones.

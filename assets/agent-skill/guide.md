@@ -45,5 +45,5 @@ An agent that is blocked on a question or a permission: answer it if it is yours
 ## Shepherd's browser
 
 Shepherd has a browser (tabs in each workspace's right panel, pages in its sidebar) that you can drive from a pane on
-this Mac: list its tabs, run JavaScript, read requests and the console, open, reload, screenshot. Before using it, run
+this Mac: list its tabs, run JavaScript, read requests and the console, open, close, reload, screenshot. Before using it, run
 the binary you ran `skill` with as `<it> browser skill` and follow what it prints.

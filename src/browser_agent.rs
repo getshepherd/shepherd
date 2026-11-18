@@ -52,6 +52,8 @@ pub enum Command {
     Open(String),
     New(String),
     Reload,
+    /// Closes a browser tab; a sidebar page or an extension's tab is not the agent's to close.
+    Close,
     Screenshot(Option<PathBuf>),
 }
 
@@ -82,6 +84,7 @@ pub fn parse(args: &[String]) -> Result<(Option<String>, Command), String> {
         Some("open") => Command::Open(one("a URL")?),
         Some("new") => Command::New(one("a URL")?),
         Some("reload") => Command::Reload,
+        Some("close") => Command::Close,
         Some("screenshot") => Command::Screenshot(rest.get(1).map(PathBuf::from)),
         Some(other) => return Err(format!("no command {other}\n\n{HELP}")),
         None => return Err(HELP.into()),
@@ -359,6 +362,7 @@ mod tests {
         assert_eq!(parse(&args("console --clear")), Ok((None, Command::Console { clear: true })));
         assert!(parse(&args("eval")).is_err());
         assert!(parse(&args("open")).is_err());
+        assert_eq!(parse(&args("--tab b3 close")), Ok((Some("b3".into()), Command::Close)));
         assert!(parse(&args("fly")).is_err());
     }
 
