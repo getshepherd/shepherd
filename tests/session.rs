@@ -68,7 +68,8 @@ cat > "$REC/stdin""#,
     let mut stdin = String::new();
     for _ in 0..50 {
         stdin = std::fs::read_to_string(&stdin_path).unwrap_or_default();
-        if stdin.lines().count() == 4 {
+        // the last line whole too: the fake may be halfway through writing it
+        if stdin.ends_with('\n') && stdin.lines().count() == 4 {
             break;
         }
         std::thread::sleep(Duration::from_millis(20));
