@@ -55,8 +55,16 @@ impl Mux for Client {
 
     fn run(&self, command: Command) -> Reply<'_, Made> {
         Box::pin(async move {
-            let (method, params) = command.request();
-            Ok(Made::of(&self.call(method, params).await?))
+            let (method, mut params) = command.request();
+            match self.call(method, params.clone()).await {
+                // herdr closes a repo's workspace only together with its open worktree workspaces, which the sidebar
+                // shows as one group under it, so close the group as herdr's own "Close group" does.
+                Err(err) if method == "workspace.close" && err.to_string().starts_with("workspace_group_close_required") => {
+                    params["close_group"] = json!(true);
+                    Ok(Made::of(&self.call(method, params).await?))
+                }
+                made => Ok(Made::of(&made?)),
+            }
         })
     }
 
@@ -220,8 +228,13 @@ mod tests {
         let refused = trees.remove(linked.clone(), false).await.unwrap_err().to_string();
         assert!(refused.starts_with("dirty_worktree_requires_force"), "{refused}");
         trees.remove(linked, true).await.unwrap();
+        // with a worktree's workspace open, closing the repo's closes both
+        let open = trees.create(workspace.clone(), "fix/group".into()).await.unwrap().workspace_id.unwrap();
+        let open_path = trees.list(workspace.clone()).await.unwrap().into_iter().find(|w| w.is_linked_worktree).unwrap().path;
         mux.run(Command::CloseWorkspace { workspace_id: workspace.clone() }).await.unwrap();
-        assert!(!backend.snapshot().await.unwrap().workspaces.iter().any(|w| w.workspace_id == workspace));
+        let left = backend.snapshot().await.unwrap();
+        assert!(!left.workspaces.iter().any(|w| w.workspace_id == workspace || w.workspace_id == open));
+        let _ = std::fs::remove_dir_all(&open_path);
         let _ = std::fs::remove_dir(std::path::Path::new(&path).parent().unwrap());
     }
 

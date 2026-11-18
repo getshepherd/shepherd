@@ -574,6 +574,13 @@ impl Shell {
             // repo (`worktree`) only once it has a worktree group, so any other workspace may be one: herdr refuses
             // a folder outside git (`not_git_worktree`), and that shows as a toast.
             let linked = worktree.as_ref().is_some_and(|w| w.is_linked_worktree);
+            // closing a repo's workspace closes its open worktrees' too (herdr's close_group)
+            let group = !linked
+                && worktree.as_ref().is_some_and(|t| {
+                    snapshot.as_ref().is_some_and(|s| {
+                        s.workspaces.iter().filter_map(|w| w.worktree.as_ref()).any(|o| o.is_linked_worktree && o.repo_key == t.repo_key)
+                    })
+                });
             let has_repo = !linked;
             let checkout = worktree.map(|w| w.checkout_path).filter(|p| !p.is_empty());
             gpui::deferred(
@@ -662,7 +669,7 @@ impl Shell {
                                 .rounded(px(6.))
                                 .text_color(theme.danger)
                                 .child(menu_mark("icons/close-circle.svg", theme.danger))
-                                .child(if linked { "Close worktree" } else { "Close workspace" }) // the checkout stays
+                                .child(if linked { "Close worktree" } else if group { "Close group" } else { "Close workspace" }) // the checkout stays
                                 .on_pick(at, cx.listener({
                                     let id = id.clone();
                                     move |this, _: &ClickEvent, _, cx| {
