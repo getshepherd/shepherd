@@ -62,6 +62,8 @@ pub(super) struct Tab {
     pub(super) leading: Leading,
     /// Fills the trailing slot until the tab is hovered.
     pub(super) status: Option<AgentStatus>,
+    /// A browser tab's notifications posted unseen, in the same slot.
+    pub(super) unread: Option<usize>,
     /// One of its panes is zoomed to fill it: the other panes are hidden.
     pub(super) zoomed: bool,
     /// The full width: label measured, clamped.
@@ -72,7 +74,7 @@ impl Tab {
     /// A tab with a plain title and one mark or none.
     pub(super) fn titled(id: &str, title: String, leading: Leading, theme: &Theme, window: &Window) -> Self {
         let width = tab_width(label_width(&title, theme, window), false, 0);
-        Tab { id: id.to_string(), name: (title.clone(), Vec::new()), label: title, leading, status: None, zoomed: false, width }
+        Tab { id: id.to_string(), name: (title.clone(), Vec::new()), label: title, leading, status: None, unread: None, zoomed: false, width }
     }
 }
 
@@ -531,9 +533,16 @@ fn face(theme: &Theme, t: &Tab, tiles: &[f32], width: f32, selected: bool, windo
         .child(leading(t, tiles, ring, theme, window))
 }
 
-/// The trailing slot: the status dot, if any.
+/// The trailing slot: the status dot or the unread count, if any.
 fn dot_slot(theme: &Theme, t: &Tab) -> Div {
-    div().size(px(SLOT)).flex_none().flex().items_center().justify_center().children(t.status.map(|s| status_dot(s, theme)))
+    div()
+        .size(px(SLOT))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .children(t.status.map(|s| status_dot(s, theme)))
+        .children(t.unread.map(|n| super::web::unread_badge(theme, n)))
 }
 
 /// A tab being dragged along its strip: its own face under the pointer, lifted on a card.
@@ -716,7 +725,7 @@ mod tests {
     }
 
     fn tab(id: &str) -> Tab {
-        Tab { id: id.into(), label: id.into(), name: (id.into(), Vec::new()), leading: Leading::Spinner, status: None, zoomed: false, width: 100. }
+        Tab { id: id.into(), label: id.into(), name: (id.into(), Vec::new()), leading: Leading::Spinner, status: None, unread: None, zoomed: false, width: 100. }
     }
 
     #[test]

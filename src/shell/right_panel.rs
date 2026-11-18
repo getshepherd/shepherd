@@ -397,7 +397,11 @@ impl Shell {
                     None => ("File".to_string(), mark(FILES_ICON)),
                 },
             };
-            Tab::titled(s.key(), title, leading, theme, window)
+            let mut tab = Tab::titled(s.key(), title, leading, theme, window);
+            if let Surface::Browser(id) = s {
+                tab.unread = self.pages.unread.get(&(id.clone(), None)).copied();
+            }
+            tab
         };
         panel.tabs.iter().map(tab).collect()
     }

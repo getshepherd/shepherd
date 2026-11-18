@@ -139,7 +139,7 @@ pub(super) struct Pages {
     /// again each launch.
     pub(super) favicons: HashMap<PageKey, (String, Favicon)>,
     /// Notifications each page posted while it wasn't shown, its row's badge; cleared once it shows.
-    unread: HashMap<PageKey, usize>,
+    pub(super) unread: HashMap<PageKey, usize>,
     /// The titles sidebar pages had in earlier launches ([`crate::web::Seen`]), with the URL each was seen at: a page
     /// not loaded goes by its last title rather than its address.
     pub(super) seen_titles: HashMap<PageKey, (String, String)>,
@@ -1397,7 +1397,7 @@ impl Shell {
 }
 
 /// The notifications a page posted unseen, as a browser's tab or a dock icon counts them.
-fn unread_badge(theme: &Theme, count: usize) -> Div {
+pub(super) fn unread_badge(theme: &Theme, count: usize) -> Div {
     div()
         .flex_none()
         .h(px(16.))

@@ -302,6 +302,7 @@ impl Shell {
                             id: t.tab_id.clone(),
                             label: t.label.clone(),
                             status: Some(t.agent_status),
+                            unread: None,
                             zoomed,
                             width: tab_width(label_width(&name.0, theme, window), zoomed, marks.len() - 1),
                             name,
