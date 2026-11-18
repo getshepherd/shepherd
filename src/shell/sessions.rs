@@ -661,10 +661,17 @@ impl Shell {
     /// To `socket` or `machine` on herdr, or to another backend, when the settings keep the herdr place left, for
     /// coming back to.
     fn move_to(&mut self, socket: Option<String>, machine: Option<String>, kind: Kind, cx: &mut Context<Self>) {
-        // the place left keeps its last snapshot, so coming back shows its workspaces before herdr answers
-        if let (Some(left), Some(snapshot)) = (self.shown_place_key(), self.snapshot.take()) {
+        // the place left keeps its last snapshot, so coming back shows its workspaces before herdr answers, and its
+        // workspaces' panels and browser tabs, which come back with it (workspace ids repeat across places)
+        let left = self.shown_place_key();
+        if let (Some(left), Some(snapshot)) = (left.clone(), self.snapshot.take()) {
             self.snapshots.insert(left, snapshot);
         }
+        if let Some(left) = &left {
+            self.right.away.insert(left.clone(), std::mem::take(&mut self.right.panels));
+            self.browser.away.insert(left.clone(), std::mem::take(&mut self.browser.tabs));
+        }
+        self.right.focused = None;
         save_from_sidebar(cx, |s| {
             s.backend = kind;
             if kind == Kind::Herdr {
@@ -690,6 +697,10 @@ impl Shell {
             }).unwrap_or_default(),
         };
         self.snapshot = self.snapshots.get(&key).cloned();
+        if left.is_some() {
+            self.right.panels = self.right.away.remove(&key).unwrap_or_default();
+            self.browser.tabs = self.browser.away.remove(&key).unwrap_or_default();
+        }
         self.error = None;
         self.connecting = Some(Instant::now());
         self.panes.clear();

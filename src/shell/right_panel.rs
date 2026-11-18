@@ -18,6 +18,8 @@ const FILES_ICON: &str = "icons/solar/folder-with-files.svg";
 pub(super) struct RightPanel {
     /// By workspace id.
     pub(super) panels: HashMap<String, PanelState>,
+    /// The panels of the places not shown (sessions, machines), by place key: back when the place is.
+    pub(super) away: HashMap<String, HashMap<String, PanelState>>,
     /// Saved in the settings when a drag ends.
     pub(super) width: f32,
     /// The panel's edge is being dragged.
@@ -63,6 +65,7 @@ impl RightPanel {
     pub(super) fn new(width: f32) -> Self {
         RightPanel {
             panels: HashMap::new(),
+            away: HashMap::new(),
             width,
             drag: false,
             edge: None,

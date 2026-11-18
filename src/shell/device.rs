@@ -389,7 +389,9 @@ impl Shell {
     /// Screens no tab shows any more stop streaming; their last frame leaves the atlas.
     pub(super) fn sync_devices(&mut self) {
         let panels = &self.right.panels;
-        let gone: Vec<String> = self.devices.screens.keys().filter(|k| !panels.values().any(|p| p.tabs.iter().any(|s| s.key() == k.as_str()))).cloned().collect();
+        // another place's panels keep theirs, back with it
+        let all = || panels.values().chain(self.right.away.values().flat_map(|p| p.values()));
+        let gone: Vec<String> = self.devices.screens.keys().filter(|k| !all().any(|p| p.tabs.iter().any(|s| s.key() == k.as_str()))).cloned().collect();
         for key in gone {
             if let Some(image) = self.devices.screens.remove(&key).and_then(|s| s.image) {
                 self.retired_images.push(image);

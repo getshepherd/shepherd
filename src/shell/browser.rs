@@ -21,6 +21,8 @@ pub(super) struct BrowserTab {
 #[derive(Default)]
 pub(super) struct Browser {
     pub(super) tabs: Vec<BrowserTab>,
+    /// The tabs of the places not shown (sessions, machines), by place key: back when the place is; their pages live on.
+    pub(super) away: HashMap<String, Vec<BrowserTab>>,
     made: u64,
     /// The shown tab's address field.
     address: Option<Address>,
@@ -53,7 +55,7 @@ struct Address {
 impl Browser {
     /// The tabs as web entries, which is how the pages know them.
     pub(super) fn entries(&self) -> impl Iterator<Item = WebEntry> + '_ {
-        self.tabs.iter().map(|t| WebEntry { id: t.id.clone(), url: t.url.clone(), ..Default::default() })
+        self.tabs.iter().chain(self.away.values().flatten()).map(|t| WebEntry { id: t.id.clone(), url: t.url.clone(), ..Default::default() })
     }
 
     /// The pane of the agent driving tab `id`, while it acted in the last `DRIVEN`.
@@ -210,7 +212,7 @@ impl Shell {
             }
         }
         let Some(s) = self.snapshot.as_ref().filter(|s| !s.workspaces.is_empty()) else { return };
-        // ponytail: another place shown (a session, a machine) closes this one's browser tabs; keyed by place if missed
+        // workspaces closed take their tabs and panels along; another place's are kept apart (`move_to`)
         self.browser.tabs.retain(|t| s.workspaces.iter().any(|w| w.workspace_id == t.workspace));
         self.right.panels.retain(|ws, _| s.workspaces.iter().any(|w| w.workspace_id == *ws));
         for (ws, panel) in &mut self.right.panels {
@@ -218,7 +220,9 @@ impl Shell {
             panel.retain_browsers(&live);
         }
         let panels = &self.right.panels;
-        self.right.diffs.retain(|id, _| panels.values().any(|p| p.tabs.iter().any(|s| s.key() == id)));
+        let away = self.right.away.values().flat_map(|p| p.values());
+        let kept: std::collections::HashSet<&str> = panels.values().chain(away).flat_map(|p| p.tabs.iter().map(|s| s.key())).collect();
+        self.right.diffs.retain(|id, _| kept.contains(id.as_str()));
         let diffs = &self.right.diffs;
         self.right.diff_agents.retain(|id, _| diffs.contains_key(id));
         self.sync_devices();

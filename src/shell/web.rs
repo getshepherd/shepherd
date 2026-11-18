@@ -392,20 +392,23 @@ impl Shell {
     pub(super) fn web_note_clicked(&mut self, serial: u64, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         use crate::right_panel::Surface;
         let Some((key, view)) = self.pages.live.iter().find(|(_, p)| p.serial == serial).map(|(k, p)| (k.clone(), p.view.clone())) else { return };
-        let in_panel = self.right.panels.iter().find_map(|(ws, panel)| {
-            let surface = panel.tabs.iter().find(|s| matches!(s, Surface::Browser(i) | Surface::Extension(i) if *i == key.0))?;
-            Some((ws.clone(), surface.clone()))
-        });
-        // the place the page belongs to comes up first: a panel tab's workspace's, a sidebar page's `show_in`
-        let here = |s: &Self, ws: &str| s.snapshot.as_ref().is_some_and(|snap| snap.workspaces.iter().any(|w| w.workspace_id == ws));
-        let place = match &in_panel {
-            Some((ws, _)) if !here(self, ws) => self.snapshots.iter().find(|(_, snap)| snap.workspaces.iter().any(|w| &w.workspace_id == ws)).map(|(k, _)| k.clone()),
+        let in_panel = |panels: &HashMap<String, crate::right_panel::PanelState>| {
+            panels.iter().find_map(|(ws, panel)| {
+                let surface = panel.tabs.iter().find(|s| matches!(s, Surface::Browser(i) | Surface::Extension(i) if *i == key.0))?;
+                Some((ws.clone(), surface.clone()))
+            })
+        };
+        // the place the page belongs to comes up first: the one whose panel has its tab, a sidebar page's `show_in`
+        let place = match in_panel(&self.right.panels) {
             Some(_) => None,
-            None => sidebar_entries(cx).into_iter().find(|e| e.id == key.0).and_then(|e| e.show_in).filter(|p| self.shown_place_key().as_ref() != Some(p)),
+            None => self.right.away.iter().find(|(_, panels)| in_panel(panels).is_some()).map(|(k, _)| k.clone()).or_else(|| {
+                sidebar_entries(cx).into_iter().find(|e| e.id == key.0).and_then(|e| e.show_in).filter(|p| self.shown_place_key().as_ref() != Some(p))
+            }),
         };
         if let Some(place) = place.and_then(|k| self.places.iter().find(|p| p.key() == k).cloned()) {
             self.switch_to(place, cx);
         }
+        let in_panel = in_panel(&self.right.panels);
         match in_panel {
             Some((ws, surface)) => {
                 let tab = self.snapshot.as_ref().and_then(|s| s.pick_tab_in(None, Some(&ws))).map(|t| t.tab_id.clone());
