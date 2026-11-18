@@ -74,7 +74,7 @@ pub fn answer_for(status: AgentStatus) -> Option<Answer> {
 
 /// Posts a notification tagged with the pane, so a click can bring that pane up; `answer` adds a button that
 /// answers the agent from the notification.
-pub fn show(cx: &App, pane_id: &str, title: String, body: String, sound: bool, answer: Option<Answer>) {
+pub fn show(cx: &App, pane_id: &str, title: String, body: String, sound: bool, answer: Option<Answer>, image: Option<std::path::PathBuf>) {
     if can_notify() {
         let action = |id: &str, label: &str, text_input: Option<&str>| SystemNotificationAction { id: id.to_string().into(), label: label.to_string().into(), text_input: text_input.map(|t| t.to_string().into()) };
         cx.show_system_notification(SystemNotification {
@@ -89,6 +89,7 @@ pub fn show(cx: &App, pane_id: &str, title: String, body: String, sound: bool, a
                 })
                 .into_iter()
                 .collect(),
+            image,
         });
     }
     #[cfg(target_os = "macos")]

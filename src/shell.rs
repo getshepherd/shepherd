@@ -118,8 +118,9 @@ pub struct Shell {
     /// A floating layer being moved or resized, and one let go, shown until the backend's snapshot catches up.
     layer_drag: Option<layer::LayerDrag>,
     layer_settling: Option<(String, crate::model::Frac)>,
-    /// The tab shown at the last render, whether a pane filled it, and its frames: a change of zoom is seen against it.
-    zoom_seen: Option<(String, bool, Vec<crate::model::PaneFrame>)>,
+    /// The tab shown at the last render, whether a pane filled it, and its frames and dividers: a change of zoom is seen
+    /// against it.
+    zoom_seen: motion::ZoomSeen,
     /// A pane growing to fill its tab, or going back to its place.
     zoom_motion: Option<ZoomMotion>,
     /// Floating layers turning into their buttons at the tab's foot, or back.
@@ -1047,7 +1048,7 @@ impl Shell {
                     Some(t) => format!("{status}: {t}"),
                     None => status.to_string(),
                 };
-                crate::notify::show(cx, &pane.pane_id, title, body, sound, crate::notify::answer_for(pane.agent_status));
+                crate::notify::show(cx, &pane.pane_id, title, body, sound, crate::notify::answer_for(pane.agent_status), None);
             }
         }
     }

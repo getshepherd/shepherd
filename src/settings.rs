@@ -162,6 +162,12 @@ pub enum PaneStyle {
 pub enum PaneSwipe {
     /// Fingers to the right pull the sidebar out, or push the right panel away; to the left the other way round.
     Sidebars,
+    /// Only the sidebar: fingers to the right pull it out, to the left push it away.
+    #[serde(rename = "left_sidebar")]
+    LeftSidebar,
+    /// Only the right panel: fingers to the left pull it out, to the right push it away.
+    #[serde(rename = "right_panel")]
+    RightPanel,
     /// Shepherd leaves the swipe to the terminal under it.
     Terminal,
     /// Fingers to the left bring the next tab, to the right the previous one, as the sidebar's swipe between places.
@@ -798,6 +804,8 @@ mod tests {
         let (_d, path) = tmp();
         std::fs::write(&path, r#"{"pane_swipe": "sidebars"}"#).unwrap();
         assert_eq!(Settings::load(&path).0.pane_swipe, PaneSwipe::Sidebars);
+        std::fs::write(&path, r#"{"pane_swipe": "right_panel"}"#).unwrap();
+        assert_eq!(Settings::load(&path).0.pane_swipe, PaneSwipe::RightPanel);
         std::fs::write(&path, r#"{"pane_swipe": "spaces"}"#).unwrap();
         assert_eq!(Settings::load(&path).0.pane_swipe, PaneSwipe::Tabs);
         assert_eq!(Settings::default().pane_swipe, PaneSwipe::Tabs);

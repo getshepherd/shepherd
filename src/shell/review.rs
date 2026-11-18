@@ -143,7 +143,7 @@ impl Shell {
             }
         } else {
             let sound = SettingsGlobal::of(cx).settings.notify_sound;
-            crate::notify::show(cx, pane.unwrap_or_default(), title.into(), branch.into(), sound, None);
+            crate::notify::show(cx, pane.unwrap_or_default(), title.into(), branch.into(), sound, None, None);
         }
     }
 

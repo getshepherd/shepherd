@@ -148,6 +148,39 @@ pub fn fetch_favicon(page: &str) -> Option<(ImageFormat, Vec<u8>)> {
     Some((image_format(&bytes)?, bytes))
 }
 
+/// A web notification's image as a file for the system notification: the bytes of its `icon` (an http(s) or data:
+/// URL), else the page's favicon `fallback`; written over the last one of page `key`, as the notification center
+/// takes a copy. ponytail: PNG, JPEG and GIF only, which macOS shows; an ICO or SVG icon shows none, convert them if
+/// those turn out common.
+pub fn notification_image(icon: &str, fallback: Option<Vec<u8>>, key: &str) -> Option<std::path::PathBuf> {
+    let shown = |bytes: &Vec<u8>| matches!(image_format(bytes), Some(ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif));
+    let bytes = icon_bytes(icon).filter(shown).or(fallback.filter(shown))?;
+    let ext = match image_format(&bytes)? {
+        ImageFormat::Jpeg => "jpg",
+        ImageFormat::Gif => "gif",
+        _ => "png",
+    };
+    let name: String = key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    let path = crate::settings::cache_dir().join("notifications").join(format!("{name}.{ext}"));
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    std::fs::write(&path, bytes).ok()?;
+    Some(path)
+}
+
+/// The bytes a data: URL holds (base64 only, as icons are) or an http(s) one answers with.
+fn icon_bytes(url: &str) -> Option<Vec<u8>> {
+    use base64::Engine as _;
+    if let Some(data) = url.strip_prefix("data:") {
+        let (meta, body) = data.split_once(',')?;
+        return meta.ends_with(";base64").then(|| base64::engine::general_purpose::STANDARD.decode(body).ok()).flatten();
+    }
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return None;
+    }
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(5))).build().into();
+    agent.get(url).call().ok()?.body_mut().with_config().limit(1 << 20).read_to_vec().ok()
+}
+
 /// What a sidebar page last showed, kept across launches in Shepherd's cache folder: its title and its favicon, so a
 /// page whose server isn't up still goes by them rather than by its address and a letter. Each is kept for the URL it
 /// was seen at, and a page on a machine apart from the same entry here: an edited URL starts afresh.
@@ -545,6 +578,18 @@ mod tests {
     fn nothing_listening_no_favicon() {
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         assert!(fetch_favicon(&format!("http://127.0.0.1:{port}/")).is_none());
+    }
+
+    #[test]
+    fn a_data_icon_decodes_and_a_blank_one_falls_back() {
+        let png = vec![0x89, b'P', b'N', b'G', 1, 2];
+        assert_eq!(icon_bytes("data:image/png;base64,iVBORwECAw=="), Some(vec![0x89, b'P', b'N', b'G', 1, 2, 3]));
+        assert_eq!(icon_bytes("data:image/svg+xml,<svg/>"), None);
+        assert_eq!(icon_bytes(""), None);
+        let path = notification_image("", Some(png.clone()), "test:fallback").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), png);
+        assert!(notification_image("", Some(b"<svg/>".to_vec()), "test:svg").is_none());
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

@@ -138,6 +138,8 @@ pub(super) struct Pages {
     /// Each page's favicon (a machine's page has its own) and the URL it was fetched for; in memory only, so fetched
     /// again each launch.
     pub(super) favicons: HashMap<PageKey, (String, Favicon)>,
+    /// Notifications each page posted while it wasn't shown, its row's badge; cleared once it shows.
+    unread: HashMap<PageKey, usize>,
     /// The titles sidebar pages had in earlier launches ([`crate::web::Seen`]), with the URL each was seen at: a page
     /// not loaded goes by its last title rather than its address.
     pub(super) seen_titles: HashMap<PageKey, (String, String)>,
@@ -381,14 +383,29 @@ impl Shell {
             let surface = panel.tabs.iter().find(|s| matches!(s, Surface::Browser(i) | Surface::Extension(i) if *i == key.0))?;
             Some((ws.clone(), surface.clone()))
         });
+        // the place the page belongs to comes up first: a panel tab's workspace's, a sidebar page's `show_in`
+        let here = |s: &Self, ws: &str| s.snapshot.as_ref().is_some_and(|snap| snap.workspaces.iter().any(|w| w.workspace_id == ws));
+        let place = match &in_panel {
+            Some((ws, _)) if !here(self, ws) => self.snapshots.iter().find(|(_, snap)| snap.workspaces.iter().any(|w| &w.workspace_id == ws)).map(|(k, _)| k.clone()),
+            Some(_) => None,
+            None => sidebar_entries(cx).into_iter().find(|e| e.id == key.0).and_then(|e| e.show_in).filter(|p| self.shown_place_key().as_ref() != Some(p)),
+        };
+        if let Some(place) = place.and_then(|k| self.places.iter().find(|p| p.key() == k).cloned()) {
+            self.switch_to(place, cx);
+        }
         match in_panel {
             Some((ws, surface)) => {
                 let tab = self.snapshot.as_ref().and_then(|s| s.pick_tab_in(None, Some(&ws))).map(|t| t.tab_id.clone());
                 let tab = if self.shown_tab().is_some_and(|t| t.workspace_id == ws) { self.selected_tab.clone() } else { tab };
                 self.select_tab(tab);
+                // `add` opens the panel, hidden or not
                 self.right.panels.entry(ws).or_default().add(surface);
+                self.focus_panel(true, window, cx);
             }
-            None => self.show_web(key.0, window, cx),
+            None => {
+                self.show_web(key.0, window, cx);
+                self.focus_panel(false, window, cx);
+            }
         }
         if id != 0 {
             let _ = view.evaluate_script(&format!("window.__shepherdNotificationClick?.({id})"));
@@ -774,12 +791,26 @@ impl Shell {
             // itself decides (Slack doesn't notify for the channel you are reading)
             PageEvent::Notify(note) => {
                 let seen = page.title.clone();
+                if self.shown_page(cx).map(|(k, _)| k).as_ref() != Some(&key) && self.panel_page(window).as_ref() != Some(&key) {
+                    *self.pages.unread.entry(key.clone()).or_default() += 1;
+                    cx.notify();
+                }
                 let entries = sidebar_entries(cx).into_iter().chain(self.panel_entries(cx));
                 let name = entries.into_iter().find(|e| e.id == key.0).map(|e| e.name).filter(|n| !n.is_empty());
                 let name = name.or(seen).unwrap_or_else(|| self.browser_label(&key.0));
                 let title = if note.title.is_empty() { name } else { format!("{} · {name}", note.title) };
                 let sound = !note.silent && SettingsGlobal::of(cx).settings.notify_sound;
-                crate::notify::show(cx, &crate::notify::web_tag(serial, note.id), title, note.body, sound, None);
+                // the notification's own icon, else the page's favicon, beside its text as a browser shows it
+                let favicon = match self.pages.favicons.get(&key) {
+                    Some((_, Favicon::Image(image))) => Some(image.bytes().to_vec()),
+                    _ => None,
+                };
+                let name = seen_key(&key);
+                cx.spawn(async move |_, cx| {
+                    let image = cx.background_spawn(async move { crate::web::notification_image(&note.icon, favicon, &name) }).await;
+                    cx.update(|cx| crate::notify::show(cx, &crate::notify::web_tag(serial, note.id), title, note.body, sound, None, image));
+                })
+                .detach();
                 return;
             }
         }
@@ -856,6 +887,9 @@ impl Shell {
         }
         let sidebar = self.shown_page(cx).map(|(key, _)| key);
         let panel = self.panel_page(window);
+        for key in sidebar.iter().chain(&panel) {
+            self.pages.unread.remove(key);
+        }
         // a page shown has no web view and no forward under its key now (the machine shown changed under it, its web
         // view dropped): one is made, as a click makes it; a browser tab that can't have one closes
         for key in sidebar.iter().chain(&panel) {
@@ -1321,6 +1355,7 @@ impl Shell {
                     .h(px(if SettingsGlobal::of(cx).settings.compact_workspaces { 26. } else { 32. }))
                     .child(div().size(px(16.)).flex_none().flex().items_center().justify_center().when(!loaded, |el| el.opacity(0.5)).child(icon))
                     .child(div().flex_1().min_w_0().truncate().when(!loaded, |el| el.text_color(theme.text_faint)).child(name))
+                    .children(self.pages.unread.get(&key).map(|n| unread_badge(theme, *n)))
                     .when(live, |el| {
                         reorder::draggable(el, &self.pages.reorder, &e.id)
                             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.show_web(id.clone(), window, cx)))
@@ -1361,6 +1396,25 @@ impl Shell {
     }
 }
 
+/// The notifications a page posted unseen, as a browser's tab or a dock icon counts them.
+fn unread_badge(theme: &Theme, count: usize) -> Div {
+    div()
+        .flex_none()
+        .h(px(16.))
+        .min_w(px(16.))
+        .px(px(4.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(theme.accent)
+        .text_size(px(10.))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .font_family("Geist Mono")
+        .text_color(theme.on_accent)
+        .child(if count > 99 { "99+".to_string() } else { count.to_string() })
+}
+
 /// The sidebar's pages: the extensions' first, then those added in Settings.
 fn sidebar_entries(cx: &App) -> Vec<WebEntry> {
     let mut entries = crate::extensions::entries(cx);
@@ -1396,7 +1450,9 @@ const NEW_TAB_SCRIPT: &str = r#"(() => {
 const NOTIFY_SCRIPT: &str = r#"(() => {
   const shown = new Map();
   let made = 0;
-  const send = (id, title, o) => window.ipc.postMessage('notify:' + JSON.stringify({ id, title: String(title), body: String(o?.body ?? ''), silent: !!o?.silent }));
+  // the icon's address made whole, as Shepherd fetches it outside the page (a blob: one it can't: none)
+  const icon = o => { try { const u = new URL(String(o?.icon ?? ''), location.href); return /^(https?|data):$/.test(u.protocol) && o?.icon ? u.href : ''; } catch { return ''; } };
+  const send = (id, title, o) => window.ipc.postMessage('notify:' + JSON.stringify({ id, title: String(title), body: String(o?.body ?? ''), silent: !!o?.silent, icon: icon(o) }));
   class Notification extends EventTarget {
     #id = ++made;
     constructor(title, options = {}) {
@@ -1464,6 +1520,9 @@ pub(super) struct WebNote {
     pub body: String,
     #[serde(default)]
     pub silent: bool,
+    /// The `icon` option's URL, http(s) or data:, or empty.
+    #[serde(default)]
+    pub icon: String,
 }
 
 /// A page that sends the links asked for in a new tab to `tab`, and its notifications to `notified`.

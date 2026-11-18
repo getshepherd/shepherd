@@ -146,15 +146,18 @@ impl Render for SettingsView {
                         )),
                     )
                     .child(
-                        card_row(&theme, false).child(row_text(&theme, "Swipe over a pane", "Two fingers across: to the next or previous tab, the sidebars out and away, or left to the terminal.")).child(
-                            crate::ui::segmented(
-                                &theme,
-                                "pane-swipe",
-                                &[(PaneSwipe::Tabs, "Tabs", None), (PaneSwipe::Sidebars, "Sidebars", None), (PaneSwipe::Terminal, "Terminal", None)],
-                                settings.pane_swipe,
-                                |swipe, cx| update(cx, |s| s.pane_swipe = swipe),
-                            ),
-                        ),
+                        card_row(&theme, false).child(row_text(&theme, "Swipe over a pane", "Two fingers across: to the next or previous tab, a sidebar out and away, or left to the terminal.")).child({
+                            const SWIPES: [(PaneSwipe, &str); 5] = [
+                                (PaneSwipe::Tabs, "Tabs"),
+                                (PaneSwipe::Sidebars, "Both sidebars"),
+                                (PaneSwipe::LeftSidebar, "Left sidebar"),
+                                (PaneSwipe::RightPanel, "Right panel"),
+                                (PaneSwipe::Terminal, "Terminal"),
+                            ];
+                            let labels = SWIPES.iter().map(|(_, l)| SharedString::from(*l)).collect();
+                            let current = SWIPES.iter().position(|(w, _)| *w == settings.pane_swipe);
+                            self.select(&theme, "pane-swipe", labels, current, "".into(), |_| None, |i, cx| update(cx, |s| s.pane_swipe = SWIPES[i].0), cx).w(px(180.))
+                        }),
                     )
                     // Secure Keyboard Entry is macOS's
                     .when(cfg!(target_os = "macos"), |el| el.child(

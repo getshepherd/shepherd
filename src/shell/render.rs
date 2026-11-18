@@ -2,7 +2,7 @@
 use super::*;
 
 /// An unfocused pane of a split shows at this opacity.
-const INACTIVE_PANE: f32 = 0.8;
+const INACTIVE_PANE: f32 = 0.7;
 /// The room between two panes in the comfortable pane style; half of it at the grid's edges.
 const PANE_GAP: f32 = 8.;
 /// The highlighted active pane's ring.
@@ -66,14 +66,14 @@ impl Render for Shell {
         };
         if let (Some(s), Some(t)) = (&snapshot, &tab) {
             let zoomed = s.layouts.iter().any(|l| l.tab_id == t.tab_id && l.zoomed);
-            if let Some(m) = ZoomMotion::follow(&mut self.zoom_seen, &t.tab_id, zoomed, &frames).filter(|_| !cx.reduce_motion()) {
+            if let Some(m) = ZoomMotion::follow(&mut self.zoom_seen, &t.tab_id, zoomed, &frames, &splits).filter(|_| !cx.reduce_motion()) {
                 self.zoom_motion = Some(m);
             }
         }
-        // a zoom on its way: the pane between its place and the whole tab, over the others, and no dividers meanwhile
+        // a zoom on its way: the split scaled about the pane, between its place and the whole tab
         match self.zoom_motion.as_ref().filter(|m| tab.as_ref().is_some_and(|t| t.tab_id == m.tab_id)).map(|m| m.frames(Instant::now())) {
             Some(Some(moving)) => {
-                (frames, splits) = (moving, Vec::new());
+                (frames, splits) = moving;
                 window.request_animation_frame();
             }
             _ => self.zoom_motion = None,
@@ -208,10 +208,12 @@ impl Render for Shell {
         // the layer in front, which a click on another one's pane raises over it
         let front = frames.iter().rev().find_map(|f| f.layer.clone());
         // a zooming pane's terminal keeps the size it had, in pixels, until it arrives: the cell moves and clips it
-        let held = self.zoom_motion.as_ref().and_then(ZoomMotion::held).zip(self.grid_bounds.get()).map(|((id, f), grid)| {
+        let (motion, grid_now) = (self.zoom_motion.as_ref(), self.grid_bounds.get());
+        let held = |id: &str| {
+            let (f, grid) = motion?.held(id).zip(grid_now)?;
             let gap = px(if comfortable { PANE_GAP } else { 0. });
-            (id.to_string(), gpui::size(grid.size.width * f.w - gap, grid.size.height * f.h - gap))
-        });
+            Some(gpui::size(grid.size.width * f.w - gap, grid.size.height * f.h - gap))
+        };
         // a pane's cell: the split's go under its dividers, the floating ones over them
         let pane_cell = |f: PaneFrame| -> gpui::AnyElement {
             let cell = div()
@@ -264,8 +266,8 @@ impl Render for Shell {
                             .size_full()
                             .relative()
                             .when(floats, |el| el.rounded(corner_r).shadow_lg().overflow_hidden())
-                            .child(match held.as_ref().filter(|(id, _)| id == &f.pane_id) {
-                                Some((_, size)) => div()
+                            .child(match held(&f.pane_id) {
+                                Some(size) => div()
                                     .size_full()
                                     .overflow_hidden()
                                     .bg(theme.terminal.background)
@@ -273,7 +275,7 @@ impl Render for Shell {
                                     .into_any_element(),
                                 None => pane.clone().cached(gpui::StyleRefinement::default().size_full()).into_any_element(),
                             })
-                            // the pane at 60%: its background over it, not `opacity`, which a cached pane's
+                            // the pane at INACTIVE_PANE: its background over it, not `opacity`, which a cached pane's
                             // replayed frame may not pick up
                             .when(dimmed, |el| el.child(div().absolute().inset_0().rounded(corner_r).bg(theme.terminal.background.opacity(1. - INACTIVE_PANE))))
                             // ponytail: overlays, not a border on the container, which shrank the grid by its width
@@ -580,6 +582,8 @@ impl Render for Shell {
                 let zoomed = snapshot.layouts.iter().any(|l| l.tab_id == tab.tab_id && l.zoomed);
                 // spread on a zoomed pane, pinched on one in its split, or a lone pane: nothing to do
                 if pinch.spread != zoomed && (zoomed || snapshot.pane_frames(&tab.tab_id).len() > 1) {
+                    // the fingers feel the pane snap in or out, as a dragged tab's do a slot
+                    haptic();
                     this.pane_command(w, cx, |pane_id| Command::Zoom { pane_id });
                 }
             }))
@@ -596,7 +600,11 @@ impl Render for Shell {
                         _ => {}
                     }
                 }
-                crate::settings::PaneSwipe::Terminal => {}
+                // fingers right pull it out, left push it away
+                crate::settings::PaneSwipe::LeftSidebar if swipe.left == this.sidebar_open => this.toggle_sidebar(cx),
+                // fingers left pull it out, right push it away
+                crate::settings::PaneSwipe::RightPanel if swipe.left != this.right_panel_shown(w) => this.toggle_right_panel(w, cx),
+                _ => {}
             }))
             .on_action(cx.listener(|this, _: &FloatPane, w, cx| this.toggle_float(w, cx)))
             .on_action(cx.listener(|this, _: &MinimizeFloating, w, cx| this.toggle_minimize(false, w, cx)))
