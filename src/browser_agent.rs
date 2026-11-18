@@ -54,7 +54,46 @@ pub enum Command {
     Reload,
     /// Closes a browser tab; a sidebar page or an extension's tab is not the agent's to close.
     Close,
-    Screenshot(Option<PathBuf>),
+    /// The page as a PNG: what shows, the whole page (`full`), or one element.
+    Screenshot { path: Option<PathBuf>, full: bool, element: Option<String> },
+    /// A script of the page's tools (`TOOLS`), whose answer is `{"ok", "text"}`: the snapshot and the actions.
+    Act(String),
+    Wait { until: Until, timeout: Duration },
+    /// Files from disk, relative to the agent's directory, put in a file input.
+    Upload { target: String, files: Vec<PathBuf> },
+    /// The page laid out at this size in CSS pixels, scaled down to fit; `None` takes it back to the panel's.
+    Viewport(Option<(f32, f32)>),
+    /// Everything WebKit keeps for the page's site: cookies (HttpOnly ones too), storage, IndexedDB, caches.
+    ClearStorage,
+}
+
+/// What `wait` waits for: a time, or a check that turns true.
+#[derive(Debug, PartialEq)]
+pub enum Until {
+    Time(Duration),
+    /// `script` answers `yes` once `what` holds; it is asked again until then, a navigation in between included.
+    Check { what: String, script: String },
+}
+
+/// What `shepherd browser` runs in a page beyond eval: the snapshot and the actions, as `window.__shepherdTools`.
+pub const TOOLS: &str = include_str!("../assets/browser-tools.js");
+
+/// `call` (on `T`, the tools) as a script that answers `{"ok", "text"}`, an error's message as the text.
+pub fn tools_call(call: &str) -> String {
+    format!(
+        "{TOOLS}\n;(() => {{ const T = window.__shepherdTools; try {{ return JSON.stringify({{ ok: true, text: String({call}) }}); }} \
+         catch (e) {{ return JSON.stringify({{ ok: false, text: String(e && e.message || e) }}); }} }})()"
+    )
+}
+
+/// `check`, a JS expression on `T`, as a script that answers `yes` or `no`, never throwing.
+fn check_script(check: &str) -> String {
+    format!("{TOOLS}\n;(() => {{ const T = window.__shepherdTools; try {{ return ({check}) ? 'yes' : 'no'; }} catch {{ return 'no'; }} }})()")
+}
+
+/// A string as a JS literal.
+fn js(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_default()
 }
 
 /// The arguments after `browser`: `--tab <id>` anywhere, then the command.
@@ -62,6 +101,7 @@ pub fn parse(args: &[String]) -> Result<(Option<String>, Command), String> {
     let mut tab = None;
     let mut timeout = Duration::from_secs(30);
     let mut clear = false;
+    let (mut full, mut element) = (false, None);
     let mut rest = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -72,10 +112,16 @@ pub fn parse(args: &[String]) -> Result<(Option<String>, Command), String> {
                 timeout = Duration::from_secs_f64(s);
             }
             "--clear" => clear = true,
+            "--full" => full = true,
+            "--element" => element = Some(it.next().ok_or("--element needs a ref (e12), text=… or a CSS selector")?.clone()),
             _ => rest.push(a.clone()),
         }
     }
     let one = |what: &str| rest.get(1).cloned().ok_or(format!("`{}` needs {what}", rest[0]));
+    let target = || one("an element: a ref from `snapshot` (e12), text=… or a CSS selector");
+    // the words after the target, as one text: `fill e3 hello world`
+    let text = |what: &str| (rest.len() > 2).then(|| rest[2..].join(" ")).ok_or(format!("`{}` needs an element and {what}", rest[0]));
+    let act = |call: String| Command::Act(tools_call(&call));
     let command = match rest.first().map(String::as_str) {
         Some("tabs") => Command::Tabs,
         Some("eval") => Command::Eval { code: rest[1..].join(" "), timeout },
@@ -85,7 +131,64 @@ pub fn parse(args: &[String]) -> Result<(Option<String>, Command), String> {
         Some("new") => Command::New(one("a URL")?),
         Some("reload") => Command::Reload,
         Some("close") => Command::Close,
-        Some("screenshot") => Command::Screenshot(rest.get(1).map(PathBuf::from)),
+        Some("screenshot") => Command::Screenshot { path: rest.get(1).map(PathBuf::from), full, element },
+        Some("snapshot") => act(format!("T.snapshot({})", rest.get(1).map_or("undefined".into(), |t| js(t)))),
+        Some(verb @ ("click" | "dblclick" | "hover" | "focus")) => act(format!("T.{verb}({})", js(&target()?))),
+        Some(verb @ ("fill" | "type")) => {
+            let t = target()?;
+            act(format!("T.{verb}({}, {})", js(&t), js(&text("the text")?)))
+        }
+        Some("press") => act(format!("T.press({})", js(&one("a key: Enter, Tab, Escape, ArrowDown, a, Meta+a, Shift+Tab")?))),
+        Some("select") => {
+            let t = target()?;
+            let values: Vec<String> = rest.iter().skip(2).cloned().collect();
+            if values.is_empty() {
+                return Err("`select` needs a <select> and the option's value or text".into());
+            }
+            act(format!("T.select({}, {})", js(&t), serde_json::to_string(&values).unwrap_or_default()))
+        }
+        Some(verb @ ("check" | "uncheck")) => act(format!("T.check({}, {})", js(&target()?), verb == "check")),
+        Some("scroll") => act(format!("T.scroll({})", js(rest.get(1).map_or("down", String::as_str)))),
+        Some("upload") => {
+            let t = target()?;
+            let files: Vec<PathBuf> = rest.iter().skip(2).map(PathBuf::from).collect();
+            if files.is_empty() {
+                return Err("`upload` needs a file input and the files' paths".into());
+            }
+            Command::Upload { target: t, files }
+        }
+        Some("back") => act("(history.back(), 'going back')".into()),
+        Some("forward") => act("(history.forward(), 'going forward')".into()),
+        Some("wait") => Command::Wait { until: until(&rest[1..])?, timeout },
+        Some("viewport") => Command::Viewport(match one("a size, 390x844, or reset")?.as_str() {
+            "reset" => None,
+            size => {
+                let (w, h) = size.split_once('x').and_then(|(w, h)| Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?))).filter(|(w, h)| *w >= 100. && *h >= 100.).ok_or(format!("{size}: a size is WIDTHxHEIGHT in CSS pixels, 100 and up"))?;
+                Some((w, h))
+            }
+        }),
+        Some("dialog") => {
+            // the answer the page's alert, confirm and prompt get from now on, in this tab until it closes
+            let answer = match (rest.get(1).map(String::as_str), rest.get(2..).map(|r| r.join(" ")).filter(|t| !t.is_empty())) {
+                (Some("accept"), text) => format!("{{ accept: true, text: {} }}", text.map_or("null".into(), |t| js(&t))),
+                (Some("dismiss"), _) => "{ accept: false }".into(),
+                (Some("ask"), _) => "null".into(),
+                _ => return Err("`dialog` needs accept [text], dismiss or ask".into()),
+            };
+            act(format!(
+                "(sessionStorage.setItem('__shepherdDialog', JSON.stringify({answer})), {})",
+                js(match rest[1].as_str() {
+                    "accept" => "alert, confirm and prompt are accepted from now on",
+                    "dismiss" => "alert, confirm and prompt are dismissed from now on",
+                    _ => "alert, confirm and prompt are the page's own again",
+                })
+            ))
+        }
+        Some("storage") => match rest.get(1).map(String::as_str) {
+            Some("clear") => Command::ClearStorage,
+            None => act(STORAGE.into()),
+            Some(other) => return Err(format!("`storage {other}`: `storage` lists, `storage clear` clears")),
+        },
         Some(other) => return Err(format!("no command {other}\n\n{HELP}")),
         None => return Err(HELP.into()),
     };
@@ -94,6 +197,47 @@ pub fn parse(args: &[String]) -> Result<(Option<String>, Command), String> {
     }
     Ok((tab, command))
 }
+
+/// What `wait` is given: `<ms>`, `text <t>`, `url <part>`, `gone <element>`, `load`, `idle`, or an element to show.
+fn until(args: &[String]) -> Result<Until, String> {
+    let rest = || (args.len() > 1).then(|| args[1..].join(" ")).ok_or(format!("`wait {}` needs what to wait for", args[0]));
+    let check = |what: String, check: String| Ok(Until::Check { what, script: check_script(&check) });
+    match args.first().map(String::as_str) {
+        None => Err("`wait` needs what to wait for: <ms>, text <t>, url <part>, gone <element>, load, idle, or an element".into()),
+        Some(ms) if ms.parse::<u64>().is_ok() => Ok(Until::Time(Duration::from_millis(ms.parse().unwrap_or(0)))),
+        Some("text") => {
+            let t = rest()?;
+            check(format!("the text {t:?}"), format!("document.body && document.body.innerText.includes({})", js(&t)))
+        }
+        Some("url") => {
+            let t = rest()?;
+            check(format!("a URL with {t:?}"), format!("location.href.includes({})", js(&t)))
+        }
+        Some("gone") => {
+            let t = rest()?;
+            check(format!("{t} gone"), format!("!T.seen({})", js(&t)))
+        }
+        Some("load") => check("the load".into(), "document.readyState === 'complete'".into()),
+        // no fetch or XHR under way, and none ended in the last half second
+        Some("idle") => check(
+            "the network to settle".into(),
+            "document.readyState === 'complete' && (() => { const n = window.__shepherdAgent?.net || []; \
+             return !n.some(e => e.status === undefined && !e.error) && Date.now() - Math.max(0, ...n.map(e => e.t + (e.ms || 0))) > 500; })()"
+                .into(),
+        ),
+        Some(_) => {
+            let t = args.join(" ");
+            check(t.clone(), format!("T.seen({})", js(&t)))
+        }
+    }
+}
+
+/// `storage`: the page's cookies (the ones its scripts see), local and session storage.
+const STORAGE: &str = r#"(() => {
+  const list = s => { try { return Object.keys(s).map(k => `  ${k} = ${JSON.stringify(s.getItem(k).slice(0, 200))}`).join('\n') || '  (empty)'; } catch (e) { return `  (${e.message})`; } };
+  const cookies = document.cookie ? document.cookie.split('; ').map(c => '  ' + c).join('\n') : '  (none a script sees: HttpOnly ones are only cleared, by `storage clear`)';
+  return `cookies:\n${cookies}\nlocalStorage:\n${list(localStorage)}\nsessionStorage:\n${list(sessionStorage)}`;
+})()"#;
 
 /// `shepherd browser skill` and `--help`: the commands, and how an agent goes about them. `shepherd skill` only points
 /// here, so its guide stays short.
@@ -107,7 +251,7 @@ pub fn cli(args: &[String]) -> i32 {
     }
     let mut args = args.to_vec();
     // `eval -`: the code from stdin, so quotes and newlines need no escaping
-    if args.iter().any(|a| a == "eval") && args.last().is_some_and(|a| a == "-") {
+    if args.iter().any(|a| matches!(a.as_str(), "eval" | "fill" | "type")) && args.last().is_some_and(|a| a == "-") {
         let mut code = String::new();
         if let Err(e) = std::io::stdin().read_to_string(&mut code) {
             eprintln!("shepherd browser: stdin: {e}");
@@ -260,6 +404,18 @@ pub const INSTRUMENT: &str = r#"(() => {
     }
     return send.apply(this, arguments);
   };
+  // alert, confirm and prompt go to the console lines, and get the answer `dialog` set, if it set one
+  for (const kind of ['alert', 'confirm', 'prompt']) {
+    const was = window[kind];
+    window[kind] = function (message, value) {
+      let answer = null;
+      try { answer = JSON.parse(sessionStorage.getItem('__shepherdDialog')); } catch {}
+      keep(A.log, { t: Date.now(), level: 'dialog', text: `${kind}(${show(message ?? '')})${answer ? (answer.accept ? ' accepted' : ' dismissed') : ''}` });
+      if (!answer) return was.apply(this, arguments);
+      if (kind === 'confirm') return answer.accept;
+      if (kind === 'prompt') return answer.accept ? (answer.text ?? value ?? '') : null;
+    };
+  }
   try { performance.setResourceTimingBufferSize(1000); } catch {}
 })();"#;
 
@@ -363,6 +519,17 @@ mod tests {
         assert!(parse(&args("eval")).is_err());
         assert!(parse(&args("open")).is_err());
         assert_eq!(parse(&args("--tab b3 close")), Ok((Some("b3".into()), Command::Close)));
+        assert_eq!(parse(&args("screenshot a.png --full")), Ok((None, Command::Screenshot { path: Some("a.png".into()), full: true, element: None })));
+        assert_eq!(parse(&args("viewport 390x844")), Ok((None, Command::Viewport(Some((390., 844.))))));
+        assert_eq!(parse(&args("viewport reset")), Ok((None, Command::Viewport(None))));
+        assert!(parse(&args("viewport 10x10")).is_err());
+        assert!(matches!(parse(&args("fill e3 hello world")), Ok((None, Command::Act(s))) if s.contains(r#"T.fill("e3", "hello world")"#)));
+        assert!(matches!(parse(&args("select #size M L")), Ok((None, Command::Act(s))) if s.contains(r##"T.select("#size", ["M","L"])"##)));
+        assert!(parse(&args("fill e3")).is_err());
+        assert_eq!(parse(&args("wait 500")), Ok((None, Command::Wait { until: Until::Time(Duration::from_millis(500)), timeout: Duration::from_secs(30) })));
+        assert!(matches!(parse(&args("wait text Saved ok")), Ok((None, Command::Wait { until: Until::Check { script, .. }, .. })) if script.contains(r#"includes("Saved ok")"#)));
+        assert!(matches!(parse(&args("upload e4 a.png b.png")), Ok((None, Command::Upload { files, .. })) if files.len() == 2));
+        assert!(parse(&args("dialog maybe")).is_err());
         assert!(parse(&args("fly")).is_err());
     }
 

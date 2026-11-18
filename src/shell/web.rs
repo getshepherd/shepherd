@@ -18,6 +18,16 @@ pub(super) fn embeds_pages(window: &Window) -> bool {
     !matches!(HasWindowHandle::window_handle(window).map(|h| h.as_raw()), Ok(RawWindowHandle::Wayland(_)))
 }
 
+/// Where a page an agent sized to `viewport` (CSS pixels) goes in `area`, and the zoom that makes it that size: the
+/// web view is the viewport scaled down to fit (never up), at the area's top left, and the page is zoomed out as much,
+/// so it lays out at the size asked. `None` is the whole area, unzoomed by this.
+// ponytail: the zoom also scales devicePixelRatio, which a real phone's is not
+pub(super) fn fit_viewport(area: Bounds<Pixels>, viewport: Option<(f32, f32)>) -> (Bounds<Pixels>, Option<f64>) {
+    let Some((w, h)) = viewport else { return (area, None) };
+    let zoom = (f32::from(area.size.width) / w).min(f32::from(area.size.height) / h).min(1.);
+    (Bounds { origin: area.origin, size: gpui::size(px(w * zoom), px(h * zoom)) }, Some(f64::from(zoom)))
+}
+
 /// A page's address. Use this, not `WebView::url`: wry's macOS one unwraps WKWebView's `URL`, which is nil until a
 /// load commits, so a page whose first load failed (a port nothing listens on) took the app down on its next frame.
 pub(super) fn page_url(view: &wry::WebView) -> Option<String> {
@@ -91,7 +101,10 @@ pub(super) struct Page {
     /// Whether it was last given the keyboard.
     focused: bool,
     /// Where it was last placed, so it isn't moved every frame.
-    placed: Rc<Cell<Option<Bounds<Pixels>>>>,
+    pub(super) placed: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The size an agent set it to (`shepherd browser viewport`), in CSS pixels, and the zoom that fits it last applied.
+    pub(super) viewport: Rc<Cell<Option<(f32, f32)>>>,
+    pub(super) viewport_zoom: Rc<Cell<Option<f64>>>,
     /// On macOS, the view of its own the page sits in, under GPUI's overlay plane.
     #[cfg(target_os = "macos")]
     host: Option<Rc<host::Host>>,
@@ -662,6 +675,8 @@ impl Shell {
             visible: false,
             focused: false,
             placed: Default::default(),
+            viewport: Default::default(),
+            viewport_zoom: Default::default(),
             #[cfg(target_os = "macos")]
             host,
             tunnel: None,
@@ -956,7 +971,7 @@ impl Shell {
             let host = p.host.clone();
             #[cfg(not(target_os = "macos"))]
             let host: Option<Rc<()>> = None;
-            (p.view.clone(), p.placed.clone(), host)
+            (p.view.clone(), p.placed.clone(), host, p.viewport.clone(), p.viewport_zoom.clone())
         });
         let sidebar_closed = !self.sidebar_open;
         let target = key.1.clone().unwrap_or_default();
@@ -1013,11 +1028,16 @@ impl Shell {
             .relative()
             .when_some(backdrop, |el, bg| el.bg(bg))
             .when_some(waiting, |el, waiting| el.flex().items_center().justify_center().child(waiting))
-            .when_some(page, |el, (view, placed, host)| {
+            .when_some(page, |el, (view, placed, host, viewport, viewport_zoom)| {
             el.child(
                 canvas(
                     move |area, _, _| page_bounds(area, sidebar_closed),
                     move |_, bounds, window, _| {
+                        let (bounds, zoom) = fit_viewport(bounds, viewport.get());
+                        if let Some(zoom) = zoom.filter(|z| viewport_zoom.get() != Some(*z)) {
+                            let _ = view.zoom(zoom);
+                            viewport_zoom.set(Some(zoom));
+                        }
                         if placed.get() == Some(bounds) {
                             return;
                         }
@@ -1814,5 +1834,16 @@ mod tests {
         assert_eq!(review_link(link), Some(("/Users/me/my repo".into(), "feat/x".into())));
         assert_eq!(review_link("shepherd://review?dir=%2Fa"), None);
         assert_eq!(review_link("https://github.com/a/b/pull/1"), None);
+    }
+
+    #[test]
+    fn a_viewport_is_scaled_down_to_fit_never_up() {
+        use gpui::{Bounds, point, px, size};
+        let area = Bounds { origin: point(px(10.), px(20.)), size: size(px(600.), px(900.)) };
+        assert_eq!(super::fit_viewport(area, None), (area, None));
+        let (phone, zoom) = super::fit_viewport(area, Some((390., 844.)));
+        assert_eq!((phone.origin, phone.size, zoom), (area.origin, size(px(390.), px(844.)), Some(1.)));
+        let (desk, zoom) = super::fit_viewport(area, Some((1200., 800.)));
+        assert_eq!((desk.size, zoom), (size(px(600.), px(400.)), Some(0.5)));
     }
 }

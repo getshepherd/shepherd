@@ -90,8 +90,9 @@ fn stub(exe: &Path) -> String {
         "---\nname: shepherd\ndescription: Subagents as interactive `claude` or `codex` in their own terminals of the multiplexer Shepherd runs on \
          (herdr, Rex, hc or tmux), where the user sees each one and can take it over. Use whenever work goes to another agent: a new agent the \
          user asks for, a subagent, a review, research, a parallel subtask, a handoff to its own branch, or a skill that asks for subagents. \
-         Also drives Shepherd's own browser (the tabs in a workspace's right panel and the pages in its sidebar) from a pane: open a page or a \
-         new tab, close it, reload, run JavaScript, read the console and requests, take a screenshot; use it instead of other browser tools \
+         Also drives Shepherd's own browser (the tabs in a workspace's right panel and the pages in its sidebar) from a pane: open and close tabs, \
+         read a page and click, fill, press keys and wait in it, run JavaScript, read the console and requests, set the viewport, take \
+         screenshots; use it instead of other browser tools \
          whenever the page is one the user sees in Shepherd or should see there. Also lists the user's Shepherd extensions (local tools with a \
          page in Shepherd and a CLI) and their skills.\n---\n\
          {HEAD}\n\n\

@@ -37,7 +37,7 @@ pub(super) struct Browser {
     /// Sites' icons for Recently used, by site (`https://github.com`): `None` while read or fetched, or when none.
     pub(super) site_icons: HashMap<String, Option<std::sync::Arc<gpui::Image>>>,
     /// Each tab's page zoom, 1 unless changed in its menu.
-    zoom: HashMap<String, f64>,
+    pub(super) zoom: HashMap<String, f64>,
     /// When an agent's `shepherd browser` last acted on each tab, and its pane (empty outside herdr).
     pub(super) driven: HashMap<String, (Instant, String)>,
 }
@@ -649,7 +649,7 @@ pub(super) fn extension_buttons(_: &Theme) -> Vec<Stateful<Div>> {
 
 /// WebKit's own, which wry doesn't reach: reload from origin and a site's data.
 #[cfg(target_os = "macos")]
-mod webkit {
+pub(super) mod webkit {
     use objc2::msg_send;
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
@@ -658,6 +658,8 @@ mod webkit {
     use wry::WebViewExtMacOS;
 
     /// `WKWebsiteDataType…`: the constants' values are their names.
+    /// Every kind WebKit keeps for a site, for `shepherd browser storage clear`.
+    pub(in crate::shell) const ALL: [&str; 11] = ["WKWebsiteDataTypeCookies", "WKWebsiteDataTypeLocalStorage", "WKWebsiteDataTypeSessionStorage", "WKWebsiteDataTypeIndexedDBDatabases", "WKWebsiteDataTypeWebSQLDatabases", "WKWebsiteDataTypeServiceWorkerRegistrations", "WKWebsiteDataTypeFileSystem", "WKWebsiteDataTypeDiskCache", "WKWebsiteDataTypeMemoryCache", "WKWebsiteDataTypeFetchCache", "WKWebsiteDataTypeOfflineWebApplicationCache"];
     pub(super) const COOKIES: [&str; 1] = ["WKWebsiteDataTypeCookies"];
     pub(super) const CACHE: [&str; 3] = ["WKWebsiteDataTypeDiskCache", "WKWebsiteDataTypeMemoryCache", "WKWebsiteDataTypeFetchCache"];
 
@@ -668,7 +670,7 @@ mod webkit {
 
     /// Removes the data of `kinds` that WebKit keeps for `host`'s site: the records whose name (the registrable
     /// domain, `github.com`) is `host` or a domain `host` is under.
-    pub(super) fn clear_site_data(view: &wry::WebView, kinds: &[&str], host: String) {
+    pub(in crate::shell) fn clear_site_data(view: &wry::WebView, kinds: &[&str], host: String) {
         let kinds: Vec<Retained<NSString>> = kinds.iter().map(|k| NSString::from_str(k)).collect();
         let kinds = NSSet::from_retained_slice(&kinds);
         // SAFETY: the page's configuration and its data store, on the main thread
