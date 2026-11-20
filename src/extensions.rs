@@ -584,7 +584,7 @@ pub fn theme_script(theme: &Theme, origin: &str) -> String {
 
 /// What a page is told about the workspace it is for (paddock's README, "For Shepherd"): `dir`, the folder of its
 /// focused pane; `workspace`, its id and label; `repo`, git's `--show-toplevel` and `--git-common-dir` of its checkout;
-/// `branch`, none for a detached HEAD.
+/// `branch`, none for a detached HEAD. [`place`] adds where that workspace lives.
 pub fn context(dir: Option<&str>, workspace: Option<(&str, &str)>, repo: Option<(&str, &str)>, branch: Option<&str>) -> serde_json::Value {
     use serde_json::json;
     let project = repo.map(|(top, common)| {
@@ -598,6 +598,17 @@ pub fn context(dir: Option<&str>, workspace: Option<(&str, &str)>, repo: Option<
         "project": project.map(|(_, root, key)| json!({ "root": root, "key": key })),
         "worktree": project.map(|(top, root, _)| json!({ "path": top, "branch": branch, "linked": top != root })),
     })
+}
+
+/// `context` with the place its workspaces are in: `backend`, as the settings name it, and for herdr `session`, its
+/// name (none for a socket outside herdr's folder, a machine's relay), the API socket a `herdr` command reaches it by
+/// (`HERDR_SOCKET_PATH`) and the SSH target of the machine it runs on. A page hears the place change as it hears the
+/// workspace change, and an extension's service, which is one for every session, asks the right server.
+pub fn place(mut context: serde_json::Value, backend: &str, session: Option<(Option<&str>, &str, Option<&str>)>) -> serde_json::Value {
+    use serde_json::json;
+    context["backend"] = backend.into();
+    context["session"] = session.map_or(json!(null), |(name, socket, machine)| json!({ "name": name, "socket": socket, "machine": machine }));
+    context
 }
 
 /// The script that tells a page of the extension at `origin` what it is for: `window.shepherd`, and a `shepherd` event
@@ -647,6 +658,11 @@ mod tests {
         assert_eq!(main["worktree"], serde_json::json!({ "path": "/src/app", "branch": null, "linked": false }));
         let none = context(None, None, None, None);
         assert!(none["project"].is_null() && none["worktree"].is_null() && none["dir"].is_null());
+        let placed = place(none.clone(), "herdr", Some((Some("work"), "/h/sessions/work/herdr.sock", None)));
+        assert_eq!(placed["session"], serde_json::json!({ "name": "work", "socket": "/h/sessions/work/herdr.sock", "machine": null }));
+        assert!(placed["dir"].is_null(), "the rest as it was");
+        let rex = place(none, "rex", None);
+        assert!(rex["backend"] == "rex" && rex["session"].is_null());
     }
 
     #[test]

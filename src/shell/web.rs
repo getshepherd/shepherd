@@ -1196,9 +1196,19 @@ impl Shell {
         self.pages.told.retain(|key, _| live.contains_key(key));
     }
 
-    /// What an extension's page for `workspace` is told: the folder of its focused pane, and the project and worktree
-    /// of its checkout (the backend's, else that folder's).
+    /// What an extension's page for `workspace` is told: that workspace, and the backend and herdr session it is in,
+    /// so a switch of session reaches the page as a change.
     fn extension_context(&self, workspace: Option<&str>, window: &Window, cx: &mut App) -> serde_json::Value {
+        let kind = self.backend.kind();
+        let socket = crate::herdr::api_socket();
+        let (name, machine) = (crate::herdr::current_session(), crate::herdr::shown_machine());
+        let session = (kind == crate::backend::Kind::Herdr).then(|| (name.as_deref(), socket.to_str().unwrap_or_default(), machine.as_deref()));
+        crate::extensions::place(self.workspace_context(workspace, window, cx), kind.key(), session)
+    }
+
+    /// The folder of `workspace`'s focused pane, and the project and worktree of its checkout (the backend's, else that
+    /// folder's).
+    fn workspace_context(&self, workspace: Option<&str>, window: &Window, cx: &mut App) -> serde_json::Value {
         use crate::ui::statusbar::{git_of, pane_dir, repo_of};
         let snapshot = self.snapshot.as_ref();
         let Some(ws) = workspace.and_then(|id| snapshot?.workspaces.iter().find(|w| w.workspace_id == id)) else {

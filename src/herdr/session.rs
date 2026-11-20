@@ -42,7 +42,7 @@ pub(super) fn client_socket() -> PathBuf {
 }
 
 /// herdr's API socket: from settings, else `HERDR_SOCKET_PATH`, else `herdr.sock` in herdr's folder.
-fn api_socket() -> PathBuf {
+pub fn api_socket() -> PathBuf {
     SOCKET.read().unwrap().clone().map(PathBuf::from).or_else(|| std::env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from)).unwrap_or_else(|| {
         super::config::dir().join("herdr.sock")
     })
