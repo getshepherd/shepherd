@@ -27,6 +27,8 @@ const CODE_PADDING_RIGHT: f32 = 24.0;
 const COMMENT_ADDER_SIZE: f32 = 16.0;
 /// Up to this many files, a PR's open unfolded (a viewed one stays shut).
 const SMALL_PR: usize = 3;
+/// One tree level's indent: a folder row's chevron and gap, so a row's icon lines up under its folder's name.
+const TREE_INDENT: f32 = 20.0;
 /// Between a capture's end and the next, while the tab is shown in a window in use.
 const POLL: Duration = Duration::from_secs(2);
 /// Between looks at whether a running turn has changed anything yet.
@@ -321,6 +323,8 @@ pub(super) struct Changes {
     closed_dirs: std::collections::HashSet<String>,
     /// The folders met so far: one met first comes closed when its files are.
     seen_dirs: std::collections::HashSet<String>,
+    /// How many folder rows each file sits in, for its header's indent.
+    tree_depths: Vec<u16>,
     /// Image files' pictures, by path, for the parse shown.
     images: HashMap<String, ImagePreview>,
     /// Comparison ref for [`DiffScope::Branch`]: preset to the repo's default branch once the branch list lands.
@@ -400,6 +404,7 @@ impl Changes {
             images: HashMap::new(),
             closed_dirs: Default::default(),
             seen_dirs: Default::default(),
+            tree_depths: Vec::new(),
             base_ref: None,
             branches: Vec::new(),
             branches_for: None,
@@ -742,6 +747,8 @@ impl Changes {
         // The uniform hint keeps offsets for never-rendered rows sane (most rows ARE lines); real heights land as rows
         // render.
         self.list.reset_with_uniform_height(rows.len(), px(DIFF_LINE_HEIGHT));
+        let shown = tree_folders(&files);
+        self.tree_depths = files.iter().map(|f| folder_chain(directory_of(&f.path), &shown).len() as u16).collect();
         self.rows = rows;
         self.row_ranges = ranges;
         if let Some(start) = top.and_then(|path| files.iter().position(|f| f.path == path)).and_then(|ix| self.row_ranges.get(ix)).map(|r| r.start) {
@@ -950,7 +957,7 @@ impl Changes {
             fold.toggled_at = None;
         }
         // the folders shut and open with their files, the tree view's or not
-        self.closed_dirs = if collapse { parsed.files.iter().map(|f| directory_of(&f.path).to_string()).filter(|d| !d.is_empty()).collect() } else { Default::default() };
+        self.closed_dirs = if collapse { tree_folders(&parsed.files).into_iter().map(str::to_string).collect() } else { Default::default() };
         self.reflatten(cx);
     }
 
@@ -1001,10 +1008,10 @@ impl Changes {
 
     /// Closes the folders whose files are all shut: every one, or (`all` false) only those not met before.
     fn close_shut_dirs(&mut self, files: &[FileDiff], all: bool) {
-        let dirs: std::collections::BTreeSet<&str> = files.iter().map(|f| directory_of(&f.path)).filter(|d| !d.is_empty()).collect();
-        for dir in dirs {
+        for dir in tree_folders(files) {
             let new = self.seen_dirs.insert(dir.to_string());
-            let shut = files.iter().filter(|f| directory_of(&f.path) == dir).all(|f| self.folds.get(&f.path).is_some_and(|fold| fold.collapsed));
+            let under = |f: &&FileDiff| f.path.strip_prefix(dir).is_some_and(|rest| rest.starts_with('/'));
+            let shut = files.iter().filter(under).all(|f| self.folds.get(&f.path).is_some_and(|fold| fold.collapsed));
             if (all || new) && shut {
                 self.closed_dirs.insert(dir.to_string());
             }
@@ -1012,8 +1019,7 @@ impl Changes {
     }
 
     /// A folder row's click: the folder closes, its files' rows gone, or opens again.
-    fn toggle_directory(&mut self, file_ix: usize, cx: &mut Context<Self>) {
-        let Some(dir) = self.parsed.as_ref().and_then(|p| p.files.get(file_ix)).map(|f| directory_of(&f.path).to_string()) else { return };
+    fn toggle_directory(&mut self, dir: String, cx: &mut Context<Self>) {
         if !self.closed_dirs.remove(&dir) {
             self.closed_dirs.insert(dir);
         }
@@ -1069,6 +1075,8 @@ impl Changes {
             |ix| self.folds.get(&files[ix].path).is_some_and(|fold| fold.collapsed),
         );
         self.list.reset_with_uniform_height(rows.len(), px(DIFF_LINE_HEIGHT));
+        let shown = tree_folders(&files);
+        self.tree_depths = files.iter().map(|f| folder_chain(directory_of(&f.path), &shown).len() as u16).collect();
         self.rows = rows;
         self.row_ranges = ranges;
         if let Some(start) = anchor_file.and_then(|ix| self.row_ranges.get(ix)).map(|r| r.start) {
@@ -1417,7 +1425,7 @@ impl Changes {
                 let fold = self.folds.get(&file_diff.path).copied().unwrap_or_default();
                 self.render_file_header(file as usize, file_diff, &fold, FileHeaderPresentation::Row, &theme, cx)
             }
-            DiffRow::Directory { file } => self.render_directory_row(file as usize, &files, &theme, cx),
+            DiffRow::Directory { file, depth, start, end } => self.render_directory_row(file as usize, depth, start as usize..end as usize, &files, &theme, cx),
             DiffRow::Image { .. } => {
                 let path = file_diff.path.clone();
                 let at = self.dir.clone().zip(self.diff.as_ref().map(|d| d.root.clone()));
@@ -1545,26 +1553,29 @@ impl Changes {
         }
     }
 
-    /// The tree view's folder row: its chevron folds all its files.
-    fn render_directory_row(&mut self, file_ix: usize, files: &[FileDiff], theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let Some(dir) = files.get(file_ix).map(|f| directory_of(&f.path).to_string()) else { return gpui::Empty.into_any_element() };
+    /// The tree view's folder row, `label` its name's span of its first file's path: its chevron folds all under it.
+    fn render_directory_row(&mut self, file_ix: usize, depth: u16, label: std::ops::Range<usize>, files: &[FileDiff], theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let Some(path) = files.get(file_ix).map(|f| f.path.as_str()).filter(|p| label.end <= p.len()) else { return gpui::Empty.into_any_element() };
+        let dir = path[..label.end].to_string();
+        let name = path[label].to_string();
         let open = !self.closed_dirs.contains(&dir);
         let hover_bg = theme.wash(0.05);
         div()
-            .id(SharedString::from(format!("dir-hdr-{file_ix}")))
+            .id(SharedString::from(format!("dir-hdr-{dir}")))
             .w_full()
             .h(px(DIRECTORY_HEIGHT))
-            .when(file_ix > 0, |el| el.border_t_1().border_color(theme.wash(0.04)))
+            .when(file_ix > 0 || depth > 0, |el| el.border_t_1().border_color(theme.wash(0.04)))
             .flex()
             .items_center()
             .gap(px(8.0))
             .px(px(12.0))
+            .pl(px(12.0 + TREE_INDENT * depth as f32))
             .cursor_pointer()
             .hover(move |s| s.bg(hover_bg))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_directory(file_ix, cx)))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_directory(dir.clone(), cx)))
             .child(gpui::svg().path(if open { "icons/alt-arrow-down.svg" } else { "icons/alt-arrow-right.svg" }).size(px(13.0)).flex_none().text_color(theme.text_muted.opacity(0.7)))
             .child(gpui::svg().path(if open { "icons/solar/folder-open.svg" } else { "icons/folder.svg" }).size(px(14.0)).flex_none().text_color(theme.text_muted))
-            .child(div().flex_1().min_w_0().truncate().font_family(theme.font_terminal.clone()).text_size(px(13.0)).text_color(theme.text_muted).child(dir))
+            .child(div().flex_1().min_w_0().truncate().font_family(theme.font_terminal.clone()).text_size(px(13.0)).text_color(theme.text_muted).child(name))
             .into_any_element()
     }
 
@@ -1587,6 +1598,7 @@ impl Changes {
         let mono = theme.font_terminal.clone();
         // under a folder's row the name says enough; the sticky header keeps the path, its folder's row scrolled away
         let nested = self.tree && !sticky && !directory_of(&file.path).is_empty();
+        let depth = if nested { self.tree_depths.get(ix).copied().unwrap_or(1) } else { 0 };
         let shown = if nested { file.path.rsplit('/').next().unwrap_or(&file.path).to_string() } else { file.path.clone() };
         // Header row: chevron + mono path + right-aligned +N / −N counts on a slightly raised wash. The header carries the
         // section separator.
@@ -1602,7 +1614,7 @@ impl Changes {
             .items_center()
             .gap(px(8.0))
             .px(px(12.0))
-            .when(nested, |el| el.pl(px(32.0)))
+            .when(nested, |el| el.pl(px(12.0 + TREE_INDENT * depth as f32)))
             .bg(theme.wash(0.025))
             .when(self.keys && self.cursor.is_some() && self.cursor == self.row_ranges.get(ix).map(|r| r.start), |el| el.bg(theme.selected))
             .cursor_pointer()
@@ -1657,7 +1669,7 @@ impl Changes {
         let files = self.parsed.as_ref()?.files.clone();
         let file = files.get(sticky.file_ix)?;
         let fold = self.folds.get(&file.path).copied().unwrap_or_default();
-        let next_header_y = sticky.next_header_row.map(|row| if row > 0 && matches!(self.rows.get(row - 1), Some(DiffRow::Directory { .. })) { row - 1 } else { row }).and_then(|row| {
+        let next_header_y = sticky.next_header_row.map(|row| row - self.rows[..row.min(self.rows.len())].iter().rev().take_while(|r| matches!(r, DiffRow::Directory { .. })).count()).and_then(|row| {
             let bounds = self.list.bounds_for_item(row)?;
             Some(f32::from(bounds.origin.y - self.list.viewport_bounds().origin.y))
         });

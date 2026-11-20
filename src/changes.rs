@@ -876,8 +876,9 @@ pub fn full_highlights(file: &FileDiff, language: Lang, old: Option<&str>, new: 
 /// wrapped line rows are measured by the list at the current pane width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffRow {
-    /// The tree view's folder row, over the files of one directory; `file` is its first.
-    Directory { file: u32 },
+    /// The tree view's folder row, over the files under one folder: `file` is its first, `depth` how many folder rows
+    /// it sits in, and the folder is that file's path up to `end`, its label from `start` on (see [`tree_folders`]).
+    Directory { file: u32, depth: u16, start: u16, end: u16 },
     FileHeader { file: u32 },
     /// An image file's picture, under its notices.
     Image { file: u32 },
@@ -900,7 +901,7 @@ pub enum DiffRow {
 impl DiffRow {
     pub fn file(self) -> usize {
         match self {
-            Self::Directory { file }
+            Self::Directory { file, .. }
             | Self::FileHeader { file }
             | Self::Image { file }
             | Self::Notice { file, .. }
@@ -999,15 +1000,30 @@ pub fn flatten_rows(
 ) -> (Vec<DiffRow>, Vec<std::ops::Range<usize>>) {
     let mut rows = Vec::new();
     let mut ranges = Vec::with_capacity(files.len());
+    let shown = tree.map(|_| tree_folders(files)).unwrap_or_default();
+    let mut above: Vec<&str> = Vec::new();
     for (ix, file) in files.iter().enumerate() {
-        // a folder's row sits between two files' spans, in neither
-        let dir = directory_of(&file.path);
-        if tree.is_some() && !dir.is_empty() && (ix == 0 || directory_of(&files[ix - 1].path) != dir) {
-            rows.push(DiffRow::Directory { file: ix as u32 });
+        // a folder's rows sit between two files' spans, in neither: the ones the file before wasn't under yet, down to
+        // the first closed one
+        let mut hidden = false;
+        if let Some(closed) = tree {
+            let chain = folder_chain(directory_of(&file.path), &shown);
+            let same = chain.iter().zip(&above).take_while(|(a, b)| a == b).count();
+            for (depth, dir) in chain.iter().enumerate() {
+                if depth >= same {
+                    let start = if depth == 0 { 0 } else { chain[depth - 1].len() + 1 };
+                    rows.push(DiffRow::Directory { file: ix as u32, depth: depth as u16, start: start as u16, end: dir.len() as u16 });
+                }
+                if closed.contains(*dir) {
+                    hidden = true;
+                    break;
+                }
+            }
+            above = chain;
         }
         let start = rows.len();
         // a closed folder's files have no rows: an empty span where they'd start
-        if tree.is_some_and(|closed| closed.contains(dir)) {
+        if hidden {
             ranges.push(start..start);
             continue;
         }
@@ -1020,6 +1036,32 @@ pub fn flatten_rows(
         ranges.push(start..rows.len());
     }
     (rows, ranges)
+}
+
+/// The tree view's folders: those with files of their own or more than one folder in them. A folder holding only one
+/// folder shares that one's row ("src/shell"), as VS Code's compact folders do, so a deep path isn't a ladder of rows.
+pub fn tree_folders(files: &[FileDiff]) -> std::collections::HashSet<&str> {
+    let mut inside: std::collections::HashMap<&str, (bool, std::collections::HashSet<&str>)> = Default::default();
+    for file in files {
+        let mut dir = directory_of(&file.path);
+        if dir.is_empty() {
+            continue;
+        }
+        inside.entry(dir).or_default().0 = true;
+        while let Some((parent, _)) = dir.rsplit_once('/') {
+            inside.entry(parent).or_default().1.insert(dir);
+            dir = parent;
+        }
+    }
+    inside.into_iter().filter(|(_, (own, folders))| *own || folders.len() > 1).map(|(dir, _)| dir).collect()
+}
+
+/// The tree view's folders `dir` is under, itself last, from the root down.
+pub fn folder_chain<'a>(dir: &'a str, shown: &std::collections::HashSet<&str>) -> Vec<&'a str> {
+    if dir.is_empty() {
+        return Vec::new();
+    }
+    dir.match_indices('/').map(|(i, _)| &dir[..i]).chain([dir]).filter(|d| shown.contains(d)).collect()
 }
 
 /// A path's folder, `""` at the root.
@@ -1835,22 +1877,20 @@ rename to new_name.rs
         assert_eq!(main_rows[1], DiffRow::HunkHeader { file: 0, hunk: 0 });
         assert_eq!(*main_rows.last().unwrap(), DiffRow::BodyPad { file: 0 });
 
-        // The tree view puts a folder's row before its first file, outside every span.
-        let tree_files: Vec<FileDiff> = ["a.rs", "src/b.rs", "src/c.rs", "src/ui/d.rs"].map(|p| FileDiff::new(p.into(), None)).into();
+        // The tree view nests folders: each one's row before its first file, outside every span. `src` holds folders
+        // and files, so it has a row; `lib` holds one folder only, so it shares `lib/x`'s row.
+        let tree_files: Vec<FileDiff> = ["src/ui/d.rs", "src/b.rs", "lib/x/e.rs", "a.rs"].map(|p| FileDiff::new(p.into(), None)).into();
+        let dir = |file, depth, start, end| DiffRow::Directory { file, depth, start, end };
+        let header = |file| DiffRow::FileHeader { file };
         let (rows, ranges) = flatten_rows(&tree_files, &[], None, DiffMode::Unified, Some(&Default::default()), |_| true);
-        assert_eq!(
-            rows,
-            [0, 1, 2, 3].map(|f| DiffRow::FileHeader { file: f }).iter().enumerate().flat_map(|(ix, header)| match ix {
-                1 | 3 => vec![DiffRow::Directory { file: ix as u32 }, *header],
-                _ => vec![*header],
-            }).collect::<Vec<_>>()
-        );
-        assert_eq!(rows[ranges[1].start], DiffRow::FileHeader { file: 1 });
-        // A closed folder keeps its row; its files have none.
+        assert_eq!(rows, [dir(0, 0, 0, 3), dir(0, 1, 4, 6), header(0), header(1), dir(2, 0, 0, 5), header(2), header(3)]);
+        assert_eq!(&tree_files[0].path[4..6], "ui");
+        assert_eq!(rows[ranges[1].start], header(1));
+        // A closed folder keeps its row; what's under it, folders too, has none.
         let closed = ["src".to_string()].into();
         let (rows, ranges) = flatten_rows(&tree_files, &[], None, DiffMode::Unified, Some(&closed), |_| true);
-        assert_eq!(rows, [DiffRow::FileHeader { file: 0 }, DiffRow::Directory { file: 1 }, DiffRow::Directory { file: 3 }, DiffRow::FileHeader { file: 3 }]);
-        assert!(ranges[1].is_empty() && ranges[2].is_empty());
+        assert_eq!(rows, [dir(0, 0, 0, 3), dir(2, 0, 0, 5), header(2), header(3)]);
+        assert!(ranges[0].is_empty() && ranges[1].is_empty());
 
         // A collapsed file contributes its header row only.
         let (rows, ranges) = flatten_rows(&files, &[], None, DiffMode::Unified, None, |ix| ix == 0);
