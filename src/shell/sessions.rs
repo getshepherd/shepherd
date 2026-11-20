@@ -76,6 +76,8 @@ pub(super) struct Swipe {
     across: Option<bool>,
     /// How far the fingers have moved across, in px.
     travel: f32,
+    /// Where the mouse holding it was last, for one dragged with the left button instead.
+    mouse: Option<gpui::Point<gpui::Pixels>>,
 }
 
 /// Past this the list goes to the next place when the fingers lift; short of it, it springs back.
@@ -511,25 +513,74 @@ impl Shell {
                 }
             }
             TouchPhase::Ended | TouchPhase::Cancelled => {
-                let Some(swipe) = self.swipe.take() else { return };
-                if swipe.across != Some(true) {
-                    return;
-                }
-                let offset = self.swipe_offset(swipe.travel);
-                match self.neighbour(swipe.travel).filter(|_| swipe.travel.abs() > SWIPE_COMMIT) {
-                    Some(place) => {
-                        let left = self.places.iter().find(|p| self.places_shown(p)).cloned();
-                        self.switch_to(place, cx);
-                        // the new list carries on from where it was beside the old one, which goes out the other side
-                        let width = self.sidebar_width;
-                        let from = if swipe.travel < 0. { width + offset } else { offset - width };
-                        self.slide = Some((from, Instant::now(), left));
-                    }
-                    None => self.slide = Some((offset, Instant::now(), None)),
-                }
-                cx.notify();
+                self.end_swipe(cx);
             }
         }
+    }
+
+    /// A press of the left button over the sidebar may become a drag of the workspace list to the neighbouring place,
+    /// for a mouse, which has no two-finger swipe.
+    pub(super) fn sidebar_press(&mut self, event: &gpui::MouseDownEvent, cx: &mut Context<Self>) {
+        // the bar's marks are dragged to reorder them, one place has nowhere to go, and a name being edited is selected
+        // by dragging
+        if self.places.len() < 2 || self.renaming.is_some() || self.bar_bounds.get().is_some_and(|b| b.contains(&event.position)) {
+            return;
+        }
+        self.swipe = Some(Swipe { mouse: Some(event.position), ..Swipe::default() });
+        self.prefetch_neighbours(cx);
+    }
+
+    /// The pressed mouse moving over the sidebar: once it clearly goes across, the list follows it. A row that is
+    /// dragged itself (a workspace, to reorder) keeps the press, and so does a drag down.
+    pub(super) fn sidebar_drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
+        let Some(last) = self.swipe.as_ref().and_then(|s| s.mouse) else { return };
+        if event.pressed_button != Some(gpui::MouseButton::Left) {
+            self.end_swipe(cx); // released where no event told
+            return;
+        }
+        if cx.has_active_drag() {
+            self.swipe = None;
+            return;
+        }
+        let (dx, dy) = (f32::from(event.position.x - last.x), f32::from(event.position.y - last.y));
+        let Some(swipe) = self.swipe.as_mut() else { return };
+        match swipe.across {
+            // further than a click's wobble, and than where a row's own drag begins
+            None if dx.hypot(dy) > 6. => swipe.across = Some(dx.abs() > dy.abs() * 1.5),
+            Some(true) => {
+                swipe.travel += dx;
+                swipe.mouse = Some(event.position);
+                self.slide = None;
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
+
+    /// The left button released anywhere: a drag of the list ends as a swipe does. True when the list was dragged, so
+    /// the release is not also a click on the row under it.
+    pub(super) fn sidebar_release(&mut self, cx: &mut Context<Self>) -> bool {
+        self.swipe.as_ref().is_some_and(|s| s.mouse.is_some()) && self.end_swipe(cx)
+    }
+
+    /// The fingers lifted, or the button released: far enough across, the list goes to the neighbouring place, else it
+    /// springs home. True when it had gone across.
+    fn end_swipe(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(swipe) = self.swipe.take().filter(|s| s.across == Some(true)) else { return false };
+        let offset = self.swipe_offset(swipe.travel);
+        match self.neighbour(swipe.travel).filter(|_| swipe.travel.abs() > SWIPE_COMMIT) {
+            Some(place) => {
+                let left = self.places.iter().find(|p| self.places_shown(p)).cloned();
+                self.switch_to(place, cx);
+                // the new list carries on from where it was beside the old one, which goes out the other side
+                let width = self.sidebar_width;
+                let from = if swipe.travel < 0. { width + offset } else { offset - width };
+                self.slide = Some((from, Instant::now(), left));
+            }
+            None => self.slide = Some((offset, Instant::now(), None)),
+        }
+        cx.notify();
+        true
     }
 
     /// The place a swipe of `travel` px goes to: fingers to the left bring the next one, as in Arc.

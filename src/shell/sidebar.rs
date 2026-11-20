@@ -574,6 +574,15 @@ impl Shell {
         // Laid out at full width and clipped by its tweened box, so rows never reflow mid slide.
         div()
             .on_scroll_wheel(cx.listener(|this, e: &gpui::ScrollWheelEvent, _, cx| this.sidebar_scroll(e, cx)))
+            // a mouse drags the list across where a trackpad swipes it; the release is caught wherever it happens, and
+            // before the row under it takes it for a click
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| this.sidebar_press(e, cx)))
+            .on_mouse_move(cx.listener(|this, e: &gpui::MouseMoveEvent, _, cx| this.sidebar_drag(e, cx)))
+            .capture_any_mouse_up(cx.listener(|this, e: &gpui::MouseUpEvent, _, cx| {
+                if e.button == MouseButton::Left && this.sidebar_release(cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .w(px(self.sidebar_width - 1.))
             .h_full()
             .flex_none()
