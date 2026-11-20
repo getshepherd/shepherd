@@ -1292,6 +1292,9 @@ fn empty(theme: &Theme, title: impl Into<SharedString>, hint: impl Into<SharedSt
         .items_center()
         .gap(px(6.))
         .text_center()
+        // The site's dither texture, piloted here first: a band over the words in a faint theme colour, so it holds in
+        // light themes as in dark ones.
+        .child(crate::ui::dither::dither(px(36.), px(3.), theme.text_faint.opacity(0.45), crate::ui::dither::horizon))
         .child(div().text_color(theme.text).child(title.into()))
         .child(div().text_size(px(12.)).text_color(theme.text_muted).child(hint.into()))
         .into_any_element()

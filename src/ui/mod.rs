@@ -1,4 +1,5 @@
 pub mod command_panel;
+pub mod dither;
 pub mod divider;
 pub mod drag;
 pub mod edge_fade;
