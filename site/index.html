@@ -23,25 +23,29 @@
 <nav>
   <div class="wrap nav-inner">
     <a class="logo" href="/" aria-label="Shepherd home"><img class="logo-mark" src="assets/icon.png" width="128" height="128" alt="">Shepherd</a>
+    <div class="nav-mid">
+      <a href="#features">Features</a>
+      <a href="#keys">Keys</a>
+      <a href="/phone/">Phone</a>
+      <a href="#downloads">Downloads</a>
+    </div>
     <div class="links">
       <a class="gh-icon" href="https://github.com/getshepherd/shepherd" aria-label="GitHub">
         <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span class="gh-stars" hidden></span>
       </a>
-      <a class="nav-link" href="/phone/">Phone</a>
       <a class="btn small" href="#downloads">Download</a>
     </div>
   </div>
 </nav>
 
 <header class="hero">
-  <canvas class="glyphs" aria-hidden="true"></canvas>
-  <div class="wrap hero-grid">
-    <div class="hero-copy">
-      <h1><b>A native window for herdr.</b> Sidebar, tabs and every agent in one view.</h1>
+  <div class="wrap head">
+    <h1><span>herdr runs your agents.</span> You see who’s waiting.</h1>
+    <div class="head-side">
+      <p>Shepherd is a native window for herdr: a sidebar, tabs, panes and a list of every coding agent with its status, so you see which one needs you.</p>
       <div class="cta-row">
         <a class="btn" id="hero-download" href="#downloads">Download</a>
         <a class="btn ghost" href="/phone/">iPhone &amp; Android</a>
-        <a class="text-link" href="#downloads">All downloads ↓</a>
       </div>
       <p class="hero-note">macOS 14 or later, Linux and Windows. Open source, MIT.</p>
     </div>
@@ -50,96 +54,167 @@
 
 <section class="shot">
   <div class="wrap">
-    <img src="assets/screenshot.webp?v=724e531d" width="2400" height="1530" alt="Shepherd in the Nord theme: the sidebar lists repos with their worktrees and seven agents with their status, a Claude Code session sits next to test and git panes, and the review panel shows the branch's pull request with its checks.">
+    <div class="card frame">
+      <canvas class="dither" aria-hidden="true"></canvas>
+      <img src="assets/screenshot.webp?v=724e531d" width="2400" height="1530" alt="Shepherd in the Nord theme: the sidebar lists repos with their worktrees and seven agents with their status, a Claude Code session sits next to test and git panes, and the review panel shows the branch's pull request with its checks.">
+    </div>
   </div>
 </section>
 
-<section class="panel-sect">
-  <div class="wrap panel">
-    <div class="p-copy p-intro">
-      <h2>Every agent at a glance.</h2>
-      <p>Shepherd is not another terminal multiplexer. herdr keeps running your sessions and agents; Shepherd is the window onto them, drawn with GPUI and its own terminal.</p>
+<section class="sect" id="features">
+  <div class="wrap">
+    <div class="head">
+      <h2><span>Not another multiplexer.</span> A window onto yours.</h2>
+      <div class="head-side">
+        <p>herdr keeps running your sessions and agents. Shepherd is the window onto them, drawn with GPUI and its own terminal.</p>
+      </div>
     </div>
-    <div class="features">
-      <div class="feature">
-        <span class="tag">agents</span>
+    <div class="bento">
+      <div class="card feature w7">
+        <div class="vig" aria-hidden="true">
+          <canvas class="dither"></canvas>
+          <div class="mock agents">
+            <div class="m-row"><i class="dot blocked"></i><b>claude</b><span>Run cargo test --lib?</span><em class="warn">needs you · 4m</em></div>
+            <div class="m-row"><i class="dot working"></i><b>codex</b><span>Port the diff rows</span><em class="run">working · 12m</em></div>
+            <div class="m-row"><i class="dot working"></i><b>claude</b><span>Rex floating layers</span><em class="run">working · 2m</em></div>
+            <div class="m-row"><i class="dot done"></i><b>claude</b><span>Release notes for 1.11.2</span><em>done</em></div>
+            <div class="m-row"><i class="dot"></i><b>codex</b><span>Windows clippy</span><em>idle</em></div>
+          </div>
+        </div>
         <h3>Who needs you</h3>
         <p>The agents list shows every agent herdr detects in any workspace, with its status: working, blocked, done or idle, the task in its title and how long it has waited. Click one to jump to its pane.</p>
       </div>
-      <div class="feature">
-        <span class="tag">notifications</span>
+      <div class="card feature w5">
+        <div class="vig" aria-hidden="true">
+          <canvas class="dither"></canvas>
+          <div class="mock note">
+            <div class="note-head"><img src="assets/icon.png" width="128" height="128" alt=""><b>claude is waiting</b><em>now</em></div>
+            <p>Run <code>git push origin main</code>?</p>
+            <div class="m-acts"><span class="m-btn">Deny</span><span class="m-btn hi">Approve</span></div>
+          </div>
+        </div>
         <h3>Approve from the notification</h3>
-        <p>When an agent you can't see starts waiting or finishes, macOS shows a notification and the Dock icon counts it until you look. Approve on the notification answers the agent without opening Shepherd.</p>
+        <p>When an agent you can’t see starts waiting or finishes, macOS shows a notification and the Dock icon counts it until you look. Approve answers the agent without opening Shepherd.</p>
       </div>
-      <div class="feature">
-        <span class="tag">worktrees</span>
+      <div class="card feature w5">
+        <div class="vig" aria-hidden="true">
+          <canvas class="dither"></canvas>
+          <div class="mock tree">
+            <div class="m-row"><b>shepherd</b><em>main</em></div>
+            <div class="m-row sub"><span>rex-floating</span><em><u>+212</u> <s>−38</s> · PR #41</em></div>
+            <div class="m-row sub"><span>site-ask-style</span><em><u>+96</u> <s>−140</s> · draft</em></div>
+            <div class="m-row sub"><span>fix-scroll</span><em><u>+8</u> <s>−2</s> · merged</em></div>
+            <div class="m-row"><b>paddock</b><em>main</em></div>
+          </div>
+        </div>
         <h3>Worktrees under the repo</h3>
-        <p>The sidebar folds a repo's worktrees under it with their branch, changes against main and PR state. Right-click creates, opens or removes one.</p>
+        <p>The sidebar folds a repo’s worktrees under it with their branch, changes against main and PR state. Right-click creates, opens or removes one.</p>
       </div>
-      <div class="feature">
-        <span class="tag">panes</span>
+      <div class="card feature w7">
+        <div class="vig" aria-hidden="true">
+          <canvas class="dither"></canvas>
+          <div class="mock panes">
+            <div class="pn tall"><span>claude</span></div>
+            <div class="pn"><span>make test</span><div class="drop"></div></div>
+            <div class="pn"><span>git</span></div>
+            <div class="drag">claude</div>
+          </div>
+        </div>
         <h3>Tabs and panes you can drag</h3>
-        <p>Drag tabs to reorder them. Drag a pane by its grip onto another pane to split or swap, or onto a tab to move it there. Dividers snap to herdr's cell grid and the terminal reflows while you drag.</p>
+        <p>Drag tabs to reorder them. Drag a pane by its grip onto another pane to split or swap, or onto a tab to move it there. Dividers snap to herdr’s cell grid and the terminal reflows while you drag.</p>
       </div>
-      <div class="feature">
-        <span class="tag">terminal</span>
+      <div class="card feature w7">
+        <div class="vig" aria-hidden="true">
+          <canvas class="dither"></canvas>
+          <pre class="mock term"><b>❯</b> make test
+<i>   Compiling</i> shepherd v1.11.2
+<i>    Finished</i> `test` profile in 14.2s
+test shell::sync::refetches_on_change ... <u>ok</u>
+test hc::tree::split_then_swap ... <u>ok</u>
+test result: <u>ok</u>. 412 passed; 0 failed
+<b>❯</b> git push <i>origin</i> main
+<b>❯</b> <span class="caret"></span></pre>
+        </div>
         <h3>Its own terminal</h3>
-        <p>libghostty-vt with Shepherd's glyph renderer: ligatures, Kitty images and box drawing. Scrollback is read from herdr once and scrolled locally. ⌘-click opens links, files, folders and images.</p>
+        <p>libghostty-vt with Shepherd’s glyph renderer: ligatures, Kitty images and box drawing. Scrollback is read from herdr once and scrolled locally. ⌘-click opens links, files, folders and images.</p>
       </div>
-      <div class="feature">
-        <span class="tag">review</span>
+      <div class="card feature w5">
+        <div class="vig" aria-hidden="true">
+          <canvas class="dither"></canvas>
+          <div class="mock checks">
+            <div class="m-row"><b>#42 The diff’s rows move to rows.rs</b></div>
+            <div class="m-row"><i class="dot done"></i><span>clippy</span><em>1m 12s</em></div>
+            <div class="m-row"><i class="dot done"></i><span>test · macOS</span><em>4m 03s</em></div>
+            <div class="m-row"><i class="dot done"></i><span>test · Linux</span><em>3m 41s</em></div>
+            <div class="m-row"><i class="dot working"></i><span>test · Windows</span><em class="run">running</em></div>
+          </div>
+        </div>
         <h3>The PR without leaving</h3>
-        <p>⌥⌘B opens the review panel: the branch's PR (gh) or MR (glab) with its description, checks or pipeline jobs and their logs. It works for SSH machines too.</p>
+        <p>⌥⌘B opens the review panel: the branch’s PR (gh) or MR (glab) with its description, checks or pipeline jobs and their logs. It works for SSH machines too.</p>
       </div>
-    </div>
-
-    <div class="panel-row">
-      <div class="p-copy">
-        <h2>Keys you already know.</h2>
-        <p>⌘K opens a command panel with every action, workspace and tab. The status bar shows the branch, its PR and CI, the current folder, the focused agent and your Claude and Codex plan limits.</p>
-        <p>Sessions and saved SSH machines sit in a bar under the sidebar, as Arc's spaces; a two-finger swipe goes to the next one. Settings cover fonts, themes, key bindings and usage, and edit herdr's own config.toml keeping your comments. Every binding can be changed.</p>
-      </div>
-      <dl class="keys">
-        <dt><kbd data-k="cmd">⌘</kbd><kbd>T</kbd><i>·</i><kbd data-k="shift">⇧</kbd><kbd data-k="cmd">⌘</kbd><kbd>W</kbd></dt><dd>New tab, close tab</dd>
-        <dt><kbd data-k="cmd">⌘</kbd><kbd>D</kbd><i>·</i><kbd data-k="shift">⇧</kbd><kbd data-k="cmd">⌘</kbd><kbd>D</kbd></dt><dd>Split right, split down</dd>
-        <dt><kbd data-k="alt">⌥</kbd><kbd data-k="cmd">⌘</kbd><kbd data-k="arrows">arrows</kbd></dt><dd>Focus the pane in that direction</dd>
-        <dt><kbd data-k="shift">⇧</kbd><kbd data-k="cmd">⌘</kbd><kbd data-k="return">↩</kbd></dt><dd>Zoom the pane</dd>
-        <dt><kbd data-k="cmd">⌘</kbd><kbd data-k="up">↑</kbd><i>·</i><kbd data-k="cmd">⌘</kbd><kbd data-k="down">↓</kbd></dt><dd>Previous or next workspace</dd>
-        <dt><kbd data-k="cmd">⌘</kbd><kbd>K</kbd></dt><dd>Command panel</dd>
-        <dt><kbd data-k="shift">⇧</kbd><kbd data-k="cmd">⌘</kbd><kbd>A</kbd></dt><dd>Agents panel</dd>
-        <dt><kbd data-k="alt">⌥</kbd><kbd data-k="cmd">⌘</kbd><kbd>B</kbd></dt><dd>Review panel</dd>
-      </dl>
     </div>
   </div>
 </section>
 
-<section class="panel-sect" id="phone">
-  <div class="wrap panel">
-    <div class="panel-row">
-      <div class="p-copy">
-        <span class="tag">iPhone · Android</span>
-        <h2>Your agents, in your pocket.</h2>
-        <p>Shepherd for iPhone and Android shows the same herdr session away from the desk: every agent with its status, a push when one is blocked or done, and the Live Activity on the lock screen. Tap the notification and it opens that agent's pane.</p>
-        <p>It is an SSH and mosh terminal too, so it reaches any server, with herdr or without.</p>
+<section class="sect" id="keys">
+  <div class="wrap">
+    <div class="head">
+      <h2><span>Keys you already know.</span> Change the ones you don’t.</h2>
+      <div class="head-side">
+        <p>⌘K opens a command panel with every action, workspace and tab. The status bar shows the branch, its PR and CI, the current folder, the focused agent and your Claude and Codex plan limits.</p>
+      </div>
+    </div>
+    <div class="bento">
+      <div class="card w7 keys-card">
+        <dl class="keys">
+          <dt><kbd data-k="cmd">⌘</kbd><kbd>T</kbd><i>·</i><kbd data-k="shift">⇧</kbd><kbd data-k="cmd">⌘</kbd><kbd>W</kbd></dt><dd>New tab, close tab</dd>
+          <dt><kbd data-k="cmd">⌘</kbd><kbd>D</kbd><i>·</i><kbd data-k="shift">⇧</kbd><kbd data-k="cmd">⌘</kbd><kbd>D</kbd></dt><dd>Split right, split down</dd>
+          <dt><kbd data-k="alt">⌥</kbd><kbd data-k="cmd">⌘</kbd><kbd data-k="arrows">arrows</kbd></dt><dd>Focus the pane in that direction</dd>
+          <dt><kbd data-k="shift">⇧</kbd><kbd data-k="cmd">⌘</kbd><kbd data-k="return">↩</kbd></dt><dd>Zoom the pane</dd>
+          <dt><kbd data-k="cmd">⌘</kbd><kbd data-k="up">↑</kbd><i>·</i><kbd data-k="cmd">⌘</kbd><kbd data-k="down">↓</kbd></dt><dd>Previous or next workspace</dd>
+          <dt><kbd data-k="cmd">⌘</kbd><kbd>K</kbd></dt><dd>Command panel</dd>
+          <dt><kbd data-k="shift">⇧</kbd><kbd data-k="cmd">⌘</kbd><kbd>A</kbd></dt><dd>Agents panel</dd>
+          <dt><kbd data-k="alt">⌥</kbd><kbd data-k="cmd">⌘</kbd><kbd>B</kbd></dt><dd>Review panel</dd>
+        </dl>
+      </div>
+      <div class="card feature w5 keys-note">
+        <canvas class="dither" aria-hidden="true"></canvas>
+        <h3>Sessions, machines, settings</h3>
+        <p>Sessions and saved SSH machines sit in a bar under the sidebar, as Arc’s spaces; a two-finger swipe goes to the next one.</p>
+        <p>Settings cover fonts, themes, key bindings and usage, and edit herdr’s own config.toml keeping your comments.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sect" id="phone">
+  <div class="wrap">
+    <div class="head">
+      <h2><span>Your agents,</span> in your pocket.</h2>
+      <div class="head-side">
+        <p>Shepherd for iPhone and Android shows the same herdr session away from the desk: every agent with its status, a push when one is blocked or done, and the Live Activity on the lock screen. It is an SSH and mosh terminal too, so it reaches any server, with herdr or without.</p>
         <div class="cta-row">
           <a class="btn" href="https://apps.apple.com/app/id6783049126">App Store</a>
           <a class="btn ghost" href="/phone/#downloads">Android APK</a>
-          <a class="text-link" href="/phone/">More about it →</a>
+          <a class="text-link" href="/phone/">More about it</a>
         </div>
       </div>
-      <div class="duo">
-        <img src="/phone/assets/herdr-list.webp" width="600" height="1304" alt="Shepherd on the phone: herdr's workspaces with their status, a worktree under its repo, and four agents, the blocked one first.">
-        <img src="/phone/assets/herdr-tab.webp" width="600" height="1304" alt="Shepherd on the phone: a herdr tab with two panes, a Claude Code session over a shell, each a live terminal.">
-      </div>
+    </div>
+    <div class="card frame duo">
+      <canvas class="dither" aria-hidden="true"></canvas>
+      <img src="/phone/assets/herdr-list.webp" width="600" height="1304" alt="Shepherd on the phone: herdr's workspaces with their status, a worktree under its repo, and four agents, the blocked one first.">
+      <img src="/phone/assets/herdr-tab.webp" width="600" height="1304" alt="Shepherd on the phone: a herdr tab with two panes, a Claude Code session over a shell, each a live terminal.">
     </div>
   </div>
 </section>
 
-<section class="downloads" aria-labelledby="downloads-title">
+<section class="sect downloads" aria-labelledby="downloads-title">
   <div class="wrap" id="downloads">
-    <div class="dl-lede">
-      <h2 id="downloads-title">Download Shepherd.</h2>
-      <p class="sub">One universal build for Apple silicon and Intel Macs, packages for Linux, a zip for Windows. <span class="version" hidden></span></p>
+    <div class="head">
+      <h2 id="downloads-title"><span>Download Shepherd.</span> Mac, Linux, Windows.</h2>
+      <div class="head-side">
+        <p>One universal build for Apple silicon and Intel Macs, packages for Linux, a zip for Windows. <span class="version" hidden></span></p>
+      </div>
     </div>
     <div class="dl-rows">
       <div class="dl-row">
@@ -178,7 +253,7 @@
           <p>Shepherd for iPhone and Android watches the same herdr session from your pocket: agent status on the lock screen, a push when one needs you, one tap to answer. It is also an SSH and mosh terminal, so it reaches the server with or without herdr. <a class="inline" href="/phone/">More about it</a>.</p>
         </div>
         <ul class="dl-list">
-          <li><span class="dl-name">iPhone</span><span class="dl-meta">App Store</span><a class="btn ghost" href="https://apps.apple.com/app/id6783049126">App Store ↗</a></li>
+          <li><span class="dl-name">iPhone</span><span class="dl-meta">App Store</span><a class="btn ghost" href="https://apps.apple.com/app/id6783049126">App Store</a></li>
           <li><span class="dl-name">Android</span><span class="dl-meta">APK · arm64</span><a class="btn ghost" href="/phone/#downloads">APK</a></li>
         </ul>
       </div>
@@ -188,33 +263,46 @@
           <p>Shepherd talks to the herdr server over ~/.config/herdr/herdr.sock, so herdr has to be installed and running. You can point it at another binary or socket in Settings.</p>
         </div>
         <ul class="dl-list">
-          <li><span class="dl-name">herdr</span><span class="dl-meta">workspaces, tabs, panes, agents</span><a class="btn ghost" href="https://herdr.dev">Get herdr ↗</a></li>
+          <li><span class="dl-name">herdr</span><span class="dl-meta">workspaces, tabs, panes, agents</span><a class="btn ghost" href="https://herdr.dev">Get herdr</a></li>
         </ul>
       </div>
     </div>
-    <p class="download-foot"><a href="https://github.com/getshepherd/shepherd/releases">Release notes ↗</a><a href="https://github.com/getshepherd/shepherd#build">Build it yourself ↗</a></p>
-  </div>
-</section>
-
-<section class="closing">
-  <div class="wrap">
-    <h2>See which agent is waiting on you.</h2>
-    <p>One window for herdr's workspaces, tabs, panes and every agent in them. Shepherd is open source and MIT licensed.</p>
-    <div class="cta-row">
-      <a class="btn" href="#downloads">Download</a>
-      <a class="btn ghost" href="https://github.com/getshepherd/shepherd">Star on GitHub ↗</a>
-    </div>
+    <p class="download-foot"><a href="https://github.com/getshepherd/shepherd/releases">Release notes</a><a href="https://github.com/getshepherd/shepherd#build">Build it yourself</a></p>
   </div>
 </section>
 
 <footer>
-  <div class="wrap footer-inner">
-    <span>Shepherd</span>
-    <div class="right">
-      <a href="https://github.com/getshepherd/shepherd">GitHub</a>
-      <span>MIT © 2026</span>
+  <div class="wrap">
+    <div class="foot-top">
+      <div class="foot-lede">
+        <h2>See which agent is waiting on you.</h2>
+        <div class="cta-row">
+          <a class="btn" href="#downloads">Download</a>
+          <a class="btn ghost" href="https://github.com/getshepherd/shepherd">Star on GitHub</a>
+        </div>
+      </div>
+      <ul class="foot-col">
+        <li>Shepherd</li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#downloads">Downloads</a></li>
+        <li><a href="/phone/">iPhone &amp; Android</a></li>
+        <li><a href="https://github.com/getshepherd/shepherd/releases">Release notes</a></li>
+      </ul>
+      <ul class="foot-col">
+        <li>Built on</li>
+        <li><a href="https://herdr.dev">herdr</a></li>
+        <li><a href="https://github.com/zeronsh/zui">GPUI</a></li>
+        <li><a href="https://github.com/ghostty-org/ghostty">libghostty-vt</a></li>
+        <li><a href="https://zeron.sh">Zeron, its look</a></li>
+      </ul>
+      <ul class="foot-col">
+        <li>Source</li>
+        <li><a href="https://github.com/getshepherd/shepherd">GitHub</a></li>
+        <li><a href="https://github.com/getshepherd/shepherd#build">Build it yourself</a></li>
+        <li>MIT © 2026</li>
+      </ul>
     </div>
-    <small class="footer-note">Built on <a href="https://github.com/zeronsh/zui">GPUI</a> and styled after <a href="https://zeron.sh">Zeron</a>. The terminal is <a href="https://github.com/ghostty-org/ghostty">libghostty-vt</a>.</small>
+    <canvas class="wordmark" aria-hidden="true"></canvas>
   </div>
 </footer>
 
