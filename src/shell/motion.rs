@@ -131,6 +131,8 @@ pub(super) const SEAM_FADE: Duration = Duration::from_millis(150);
 
 /// A pane divider's hit strip, centred on the panes' shared edge.
 pub(super) const PANE_SEAM_HIT: f32 = 10.;
+/// The hit strip on the sidebar's and the right panel's edges, as wide as a pane seam's: at 6 px a quick press missed it.
+pub(super) const SIDE_SEAM_HIT: f32 = 10.;
 
 /// A pane divider: a 1 px `rest` line always on the panes' shared edge (the strip's centre), and over it the
 /// sidebar's `lit` seam (`resize_seam`, fading toward both ends) while hovered or dragged.

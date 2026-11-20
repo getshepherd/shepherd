@@ -673,6 +673,7 @@ impl Render for Shell {
                             return;
                         }
                         let _ = shell.update(cx, |this, cx| {
+                            this.sidebar_drag(e, cx);
                             this.drag_divider(e.position, cx);
                             this.drag_layer(e.position, cx);
                             this.drag_sidebar(e.position.x, cx);
@@ -685,6 +686,7 @@ impl Render for Shell {
                 .size_full()
             })
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                this.sidebar_release(cx);
                 this.end_divider(cx);
                 this.end_layer_drag(cx);
                 this.end_sidebar_drag(cx);
@@ -692,6 +694,7 @@ impl Render for Shell {
                 this.end_agents_drag(cx);
             }))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                this.sidebar_release(cx);
                 this.end_divider(cx);
                 this.end_layer_drag(cx);
                 this.end_sidebar_drag(cx);
@@ -772,14 +775,14 @@ impl Render for Shell {
                         .absolute()
                         .top(px(TITLEBAR_HEIGHT))
                         .bottom_0()
-                        .left(px(sidebar_w - 3.))
-                        .w(px(6.))
+                        .left(px(sidebar_w - 4.))
+                        .w(px(SIDE_SEAM_HIT))
                         .cursor_col_resize()
-                        // The sidebar's 1 px border sits at x = 2 of the strip.
+                        // The sidebar's 1 px border sits at x = 3 of the strip, which reaches further over the panes.
                         .child(resize_seam(
                             "sidebar-resize".into(),
                             true,
-                            2.,
+                            3.,
                             theme.accent,
                             self.sidebar_drag,
                             self.seam_hover.get("sidebar-resize").copied(),

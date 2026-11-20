@@ -530,8 +530,9 @@ impl Shell {
         self.prefetch_neighbours(cx);
     }
 
-    /// The pressed mouse moving over the sidebar: once it clearly goes across, the list follows it. A row that is
-    /// dragged itself (a workspace, to reorder) keeps the press, and so does a drag down.
+    /// The pressed mouse moving, anywhere and out of the window too, after a press on the sidebar: once it clearly goes
+    /// across, the list follows it. A row that is dragged itself (a workspace, to reorder) keeps the press, and so does
+    /// a drag down.
     pub(super) fn sidebar_drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
         let Some(last) = self.swipe.as_ref().and_then(|s| s.mouse) else { return };
         if event.pressed_button != Some(gpui::MouseButton::Left) {

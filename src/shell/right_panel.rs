@@ -497,10 +497,11 @@ impl Shell {
             .bottom_0()
             .right(px(now - 3.))
             .when(grown, |el| el.invisible())
-            .w(px(6.))
+            .w(px(SIDE_SEAM_HIT))
             .cursor_col_resize()
-            // the panel's 1 px border sits at x = 3 of the strip
-            .child(resize_seam("right-panel-resize".into(), true, 3., theme.accent, self.right.drag, self.seam_hover.get("right-panel-resize").copied()))
+            // the panel's 1 px border sits at x = 7 of the strip: most of it lies over the panes, since a web page in
+            // the panel (a browser tab, an extension's) takes the mouse over its own side
+            .child(resize_seam("right-panel-resize".into(), true, 7., theme.accent, self.right.drag, self.seam_hover.get("right-panel-resize").copied()))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
