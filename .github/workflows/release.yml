@@ -189,8 +189,9 @@ jobs:
           - { arch: aarch64, target: aarch64-pc-windows-msvc, cross: true }
     needs: version
     # windows-latest is the VS 2026 image, whose STL (MSVC 14.52) refuses any clang before 22, and Zig 0.16's is older:
-    # libghostty-vt's simdutf failed to build there (STL1000). The VS 2022 image until Zig's clang catches up.
-    runs-on: windows-2025
+    # libghostty-vt's simdutf failed to build there (STL1000), as on windows-2025, which went to VS 2026 too. The
+    # VS 2022 image until Zig's clang catches up.
+    runs-on: windows-2022
     continue-on-error: ${{ matrix.cross == true }}
     defaults:
       run:
