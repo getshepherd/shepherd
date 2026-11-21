@@ -126,13 +126,24 @@ pub fn split(dir: &str) -> (Option<&str>, &str) {
 
 /// `git -C <path> <args>` for a located directory: here, or on its machine over the shared SSH connection.
 pub fn git(dir: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
-    match split(dir) {
-        (None, path) => crate::process::command("git").arg("-C").arg(path).args(args).stdin(Stdio::null()).output(),
+    git_command(dir, args).output()
+}
+
+/// [`git`]'s command, unstarted: for output read as it comes.
+pub fn git_command(dir: &str, args: &[&str]) -> std::process::Command {
+    let mut git = match split(dir) {
+        (None, path) => {
+            let mut git = crate::process::command("git");
+            git.arg("-C").arg(path).args(args);
+            git
+        }
         (Some(target), path) => {
             let words: Vec<String> = ["git", "-C", path].iter().chain(args).map(|w| quote(w)).collect();
-            ssh(target, &words.join(" "))
+            ssh_command(target, &words.join(" "))
         }
-    }
+    };
+    git.stdin(Stdio::null());
+    git
 }
 
 /// `script` run by `sh` on the machine at `target` (its login shell may be fish), over the shared SSH connection.

@@ -395,7 +395,6 @@ impl Render for SettingsView {
                         UsageAgent::Claude => ("From Claude Code's sign-in.", "https://claude.ai/settings/usage"),
                         UsageAgent::Codex => ("From Codex's ChatGPT sign-in.", "https://chatgpt.com/codex/settings/usage"),
                     };
-                    // ponytail: no loading state; the first second after opening reads as not signed in
                     let usage = crate::ui::statusbar::usage_of(agent, cx);
                     card(&theme)
                         .child(
@@ -406,7 +405,8 @@ impl Render for SettingsView {
                         .child(div().px(px(8.)).pb(px(8.)).text_size(px(12.)).map(|el| match &usage {
                             Some(Ok(limits)) if !limits.windows.is_empty() => el.children(limits.windows.iter().map(|l| crate::ui::statusbar::limit_row(&theme, agent, l))),
                             Some(Err(why)) => el.child(div().px(px(8.)).pb(px(4.)).text_color(theme.text_muted).child(format!("{why}."))),
-                            _ => el.child(div().px(px(8.)).pb(px(4.)).text_color(theme.text_muted).child(format!("Sign in to {} to see its limits.", agent.label()))),
+                            Some(Ok(_)) => el.child(div().px(px(8.)).pb(px(4.)).text_color(theme.text_muted).child(format!("Sign in to {} to see its limits.", agent.label()))),
+                            None => el.child(div().px(px(8.)).pb(px(4.)).text_color(theme.text_muted).child("Loading…")),
                         }))
                 });
                 div()

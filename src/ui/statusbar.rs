@@ -217,9 +217,9 @@ pub fn parse_shortstat(out: &str) -> (u32, u32) {
     (count("insertion"), count("deletion"))
 }
 
-// ponytail: untracked files don't count until they're added; `--intent-to-add` would touch the agents' index.
 /// What the worktree at `dir` changed: lines added and removed from its base to its working tree, so commits, staged
-/// and unstaged edits all count. The base is the newest commit it shares with any of `origin/HEAD`, its local twin
+/// and unstaged edits all count, and new files git doesn't track yet as lines added (read here: `--intent-to-add`
+/// would touch the agents' index). The base is the newest commit it shares with any of `origin/HEAD`, its local twin
 /// (`develop` for `origin/develop`), `main` and `master`: a local default ahead of origin and an origin that already
 /// merged the branch both move it up. `None` without any of them.
 fn read_changes(dir: &str) -> Option<(u32, u32)> {
@@ -228,7 +228,26 @@ fn read_changes(dir: &str) -> Option<(u32, u32)> {
     let local = format!("refs/heads/{}", remote.trim().strip_prefix("origin/").unwrap_or("main"));
     let refs = git(&["for-each-ref", "--format=%(objectname)", "refs/remotes/origin/HEAD", &local, "refs/heads/main", "refs/heads/master"])?;
     let base = git(&[&["merge-base", "HEAD"][..], &refs.lines().collect::<Vec<_>>()].concat())?;
-    Some(parse_shortstat(&git(&["diff", "--shortstat", base.trim()])?))
+    let (added, removed) = parse_shortstat(&git(&["diff", "--shortstat", base.trim()])?);
+    let untracked = git(&["ls-files", "--others", "--exclude-standard", "-z"]).unwrap_or_default();
+    Some((added + untracked_lines(Path::new(dir), &untracked), removed))
+}
+
+/// The text lines of the untracked files `ls-files -z` named under `dir`, as `git diff` would count them once added.
+// ponytail: the first 500 files, each under 1 MiB, binary ones left out as git leaves them; a build folder nobody
+// ignored would otherwise be read whole on every poll.
+fn untracked_lines(dir: &Path, listed: &str) -> u32 {
+    listed
+        .split('\0')
+        .filter(|f| !f.is_empty())
+        .take(500)
+        .filter_map(|f| {
+            let path = dir.join(f);
+            (std::fs::metadata(&path).ok()?.len() < 1 << 20).then_some(())?;
+            let bytes = std::fs::read(path).ok()?;
+            (!bytes.contains(&0)).then(|| (bytes.iter().filter(|&&b| b == b'\n').count() + usize::from(bytes.last().is_some_and(|&b| b != b'\n'))) as u32)
+        })
+        .sum()
 }
 
 /// A branch's GitHub PR or GitLab MR.
@@ -1069,6 +1088,16 @@ pub fn bar(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn untracked_files_count_their_lines_as_git_would() {
+        let dir = std::env::temp_dir().join(format!("shepherd-untracked-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "one\n\nthree").unwrap();
+        std::fs::write(dir.join("b.bin"), [1u8, 0, 2]).unwrap();
+        assert_eq!(untracked_lines(&dir, "a.txt\0b.bin\0gone.txt\0"), 3, "binary and missing files count nothing");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn parses_ahead_and_behind() {

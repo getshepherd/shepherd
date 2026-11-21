@@ -582,7 +582,12 @@ impl Shell {
                     })
                 });
             let has_repo = !linked;
-            let checkout = worktree.map(|w| w.checkout_path).filter(|p| !p.is_empty());
+            // its checkout, or where its panes opened when it has none; a machine's folder isn't Finder's to show
+            let checkout = snapshot
+                .as_ref()
+                .and_then(|s| s.workspaces.iter().find(|w| w.workspace_id == id))
+                .and_then(|w| super::sidebar::workspace_dir(w, snapshot.as_ref()))
+                .filter(|d| crate::herdr::split(d).0.is_none());
             gpui::deferred(
                 gpui::anchored().position(at).snap_to_window_with_margin(px(8.)).child(crate::ui::menu_motion(
                     "ws-menu-in",

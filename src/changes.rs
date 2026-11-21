@@ -1129,6 +1129,29 @@ fn run(dir: &str, args: &[&str]) -> Result<Vec<u8>, String> {
     }
 }
 
+/// [`run`]'s output, read no further than past `cap` bytes: git is stopped there, so a huge diff is neither waited
+/// for nor held whole.
+fn run_capped(dir: &str, args: &[&str], cap: usize) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut child = crate::herdr::git_command(dir, args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    let read = child.stdout.take().map(|s| s.take(cap as u64 + 1).read_to_end(&mut out));
+    if out.len() > cap {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Ok(out);
+    }
+    read.transpose().map_err(|e| e.to_string())?;
+    let mut err = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let _ = stderr.read_to_string(&mut err);
+    }
+    match child.wait().map_err(|e| e.to_string())?.success() {
+        true => Ok(out),
+        false => Err(err.trim().to_string()),
+    }
+}
+
 fn line(bytes: Vec<u8>) -> String {
     String::from_utf8_lossy(&bytes).trim().to_string()
 }
@@ -1196,8 +1219,7 @@ fn untracked_patch(dir: &str, root: &str, path: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-// ponytail: `git diff` is read whole before the limit cuts it, and it runs on a poll; a kill at the limit, and a
-// filesystem watch here (Zeron's), if a huge tree or diff makes it felt.
+// ponytail: it runs on a poll; a filesystem watch here (Zeron's) if a huge tree makes it felt.
 /// The working tree against HEAD, or with `base_ref` against its merge base with HEAD; untracked files count as new
 /// either way.
 pub fn capture(dir: &str, base_ref: Option<&str>) -> Result<CheckoutDiff, String> {
@@ -1215,7 +1237,7 @@ pub fn capture(dir: &str, base_ref: Option<&str>) -> Result<CheckoutDiff, String
     };
     let mut diff = at_root(&root, &DIFF);
     diff.extend([base.as_str(), "--"]);
-    let mut patch = String::from_utf8_lossy(&run(dir, &diff)?).into_owned();
+    let mut patch = String::from_utf8_lossy(&run_capped(dir, &diff, MAX_PATCH_BYTES)?).into_owned();
     let status = checkout_status(dir, &root)?;
     let paths = status_paths(&status);
     let mut truncated = paths.is_none();
@@ -1300,7 +1322,7 @@ pub fn capture_turn(dir: &str) -> Result<CheckoutDiff, String> {
     let now = snapshot_tree(dir)?;
     let mut diff = at_root(&root, &DIFF);
     diff.extend([base.as_str(), now.as_str(), "--"]);
-    let mut patch = String::from_utf8_lossy(&run(dir, &diff)?).into_owned();
+    let mut patch = String::from_utf8_lossy(&run_capped(dir, &diff, MAX_PATCH_BYTES)?).into_owned();
     let truncated = patch.len() > MAX_PATCH_BYTES;
     if truncated {
         let end = patch[..patch.floor_char_boundary(MAX_PATCH_BYTES)].rfind('\n').unwrap_or(0);
@@ -1742,6 +1764,15 @@ pub fn strip_fence(text: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_capped_run_stops_past_the_cap() {
+        let dir = std::env::temp_dir().to_string_lossy().into_owned();
+        let whole = run_capped(&dir, &["--version"], 1 << 20).unwrap();
+        assert!(whole.starts_with(b"git version"));
+        assert_eq!(run_capped(&dir, &["--version"], 3).unwrap(), &whole[..4], "the cap and a byte, to tell it was cut");
+        assert!(run_capped(&dir, &["no-such-command"], 1 << 20).is_err());
+    }
 
     const PATCH: &str = "\
 diff --git a/src/main.rs b/src/main.rs

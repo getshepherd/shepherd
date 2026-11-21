@@ -15,6 +15,7 @@ members = ["packages/*"]
 ghostty-vt = { version = "=0.7.0", default-features = false }
 anyhow = "1"
 base64 = "0.22"
+shlex = "1.3"
 futures = "0.3"
 gpui = { git = "https://github.com/zeronsh/zui", rev = "18a89af04cfe079d55275b111ac349d5640d9cda" }
 gpui-base = { git = "https://github.com/zeronsh/gpui-component", rev = "103f13da91ff2c7c52941bdc2b1910f29716dc19" }

@@ -21,20 +21,20 @@ pub(super) const HC_FIELDS: [HcField; 3] = [
 /// `key`'s value as its field shows it.
 pub(super) fn hc_text(config: &HerdrConfig, key: &str) -> Option<String> {
     match key {
-        "shell" => config.strs(key).map(|argv| argv.join(" ")),
+        "shell" => config.strs(key).map(|argv| shlex::try_join(argv.iter().map(String::as_str)).unwrap_or_else(|_| argv.join(" "))),
         _ => config.number(key).map(|n| n.to_string()),
     }
 }
 
 /// A field's `text` as `config.toml` takes it, `None` for hc's default. Checked here, as hc refuses to run on a file it
 /// cannot read.
-// ponytail: `shell` splits on spaces, so a path with a space goes in the file by hand
 fn hc_value(key: &str, text: &str) -> Result<Option<toml_edit::Value>, String> {
     if text.is_empty() {
         return Ok(None);
     }
     if key == "shell" {
-        return Ok(Some(text.split_whitespace().collect()));
+        // as a shell reads it, so a path with a space goes in quotes
+        return shlex::split(text).map(|argv| Some(argv.into_iter().collect())).ok_or_else(|| format!("{text} has an unclosed quote"));
     }
     match text.parse::<f64>() {
         Ok(number) if number.is_finite() && number >= 0. => Ok(Some(number.into())),
@@ -241,6 +241,8 @@ mod tests {
     fn a_field_goes_in_the_file_as_hc_reads_it() {
         assert_eq!(hc_value("shell", "").unwrap().map(|v| v.to_string()), None, "hc's default");
         assert_eq!(hc_value("shell", "nu  -l").unwrap().unwrap().to_string(), r#"["nu", "-l"]"#);
+        assert_eq!(hc_value("shell", "'/Applications/My Shell/sh' -l").unwrap().unwrap().to_string(), r#"["/Applications/My Shell/sh", "-l"]"#);
+        assert!(hc_value("shell", "\"/a b").is_err(), "an unclosed quote");
         assert_eq!(hc_value("history_mb", "2.5").unwrap().unwrap().as_float(), Some(2.5));
         assert_eq!(hc_value("wait_timeout", "180").unwrap().unwrap().as_float(), Some(180.));
         for bad in ["-1", "a lot", "inf", "NaN"] {

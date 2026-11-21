@@ -299,20 +299,38 @@ fn snapshot_end(head: &[u8], searched: usize, nonce: u64) -> Option<usize> {
 struct Sizing {
     observe: bool,
     ours: Option<String>,
+    /// The tail of the last frame a message may continue from: its unfinished message, or what could be the start
+    /// of a mark.
+    carry: Vec<u8>,
 }
 
+/// A message this long with no end yet is a program's text, not Rex's; it is dropped rather than held.
+const MAX_CARRY: usize = 4096;
+
 impl Sizing {
-    /// What the last `resize` message in `bytes` says, if one is there.
-    // ponytail: Rex sends each message as a frame of its own; one split across frames would be missed
+    /// What the last `resize` message in `bytes` says, if one is there. A message split across frames is read once
+    /// its end arrives.
     fn read(&mut self, bytes: &[u8], nonce: u64) -> Option<SessionEvent> {
         let mark = format!("\x1b_rex1;{nonce};");
+        let mut joined = std::mem::take(&mut self.carry);
+        joined.extend_from_slice(bytes);
         let mut said = None;
-        let mut rest = bytes;
-        while let Some(at) = rest.windows(mark.len()).position(|w| w == mark.as_bytes()) {
-            rest = &rest[at + mark.len()..];
-            let Some(end) = rest.windows(2).position(|w| w == b"\x1b\\") else { break };
-            let message: Value = serde_json::from_slice(&rest[..end]).unwrap_or_default();
-            rest = &rest[end..];
+        let mut rest = &joined[..];
+        loop {
+            let Some(at) = rest.windows(mark.len()).position(|w| w == mark.as_bytes()) else {
+                let keep = rest.len().min(mark.len() - 1);
+                self.carry = rest[rest.len() - keep..].to_vec();
+                break;
+            };
+            let body = &rest[at + mark.len()..];
+            let Some(end) = body.windows(2).position(|w| w == b"\x1b\\") else {
+                if rest.len() - at <= MAX_CARRY {
+                    self.carry = rest[at..].to_vec();
+                }
+                break;
+            };
+            let message: Value = serde_json::from_slice(&body[..end]).unwrap_or_default();
+            rest = &body[end..];
             if message["type"] != "resize" {
                 continue;
             }
@@ -381,6 +399,11 @@ mod tests {
         let (me, rexapp) = (",\"owner\":\"client:me\"", ",\"owner\":\"client:app\"");
         let mut sizing = Sizing::default();
         assert!(matches!(sizing.read(said(me, 80).as_bytes(), 7), Some(SessionEvent::PaneSize(80, 30))), "the first owner is this pane");
+        let split = said(rexapp, 90);
+        for cut in [3, 12, split.len() - 1] {
+            assert!(sizing.read(&split.as_bytes()[..cut], 7).is_none());
+            assert!(matches!(sizing.read(&split.as_bytes()[cut..], 7), Some(SessionEvent::Size(90, 30))), "split at {cut}");
+        }
         assert!(matches!(sizing.read(format!("$ {}ls", said(rexapp, 100)).as_bytes(), 7), Some(SessionEvent::Size(100, 30))));
         assert!(sizing.read(b"\x1b_rex1;9;{\"type\":\"resize\",\"cols\":1,\"rows\":1}\x1b\\", 7).is_none(), "another nonce is a program's");
         assert!(matches!(sizing.read(said(me, 80).as_bytes(), 7), Some(SessionEvent::PaneSize(80, 30))), "given back");

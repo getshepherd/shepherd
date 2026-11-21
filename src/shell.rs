@@ -432,6 +432,8 @@ impl Shell {
                     cx.set_global(crate::terminal::pane::Yielded(!active));
                     if active {
                         s.refresh_places(cx); // sessions made or deleted elsewhere
+                        s.closed_worktrees_for = None; // and worktrees, which the poll skipped meanwhile
+                        s.refresh_closed_worktrees(cx);
                         s.push_host_theme(cx);
                         crate::notify::recheck(cx); // back from System Settings, perhaps
                     }
@@ -712,10 +714,13 @@ impl Shell {
                 .detach();
                 // With All worktrees on, a worktree added or removed outside (git in a terminal) shows without
                 // waiting for the workspaces to change.
-                // ponytail: one worktree.list a repo every 15 s, window in front or not
+                // One worktree.list a repo every 15 s while the window is in front; coming back to it asks at once.
                 cx.spawn(async move |this, cx| loop {
                     cx.background_executor().timer(Duration::from_secs(15)).await;
                     let alive = this.update(cx, |s, cx| {
+                        if cx.try_global::<crate::terminal::pane::Yielded>().is_some_and(|y| y.0) {
+                            return;
+                        }
                         s.closed_worktrees_for = None;
                         s.refresh_closed_worktrees(cx);
                     });
