@@ -48,11 +48,13 @@ mod tab_bar;
 mod tabs;
 mod threads;
 mod web;
+mod welcome;
 mod widgets;
 mod window;
 mod workspaces;
 
 pub(crate) use window::window_background;
+pub use welcome::welcome;
 use window::*;
 pub(crate) use browser::open_link;
 // Only the WebKit extensions host (macOS) opens a tab from outside the shell; elsewhere the import would be unused.

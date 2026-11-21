@@ -335,8 +335,14 @@ impl Render for Shell {
                     .absolute()
                     .size_full(),
             )
-            .when_some(self.error.clone(), |el, err| el.child(div().p_4().text_color(theme.text_muted).child(err)))
-            .when(snapshot.is_none() && self.error.is_none() && self.connecting.is_some_and(|at| crate::ui::loader::due(at, window)), |el| {
+            // with nothing shown yet, why there is nothing; "Downloading herdr…" and "Starting herdr…" are on their way
+            // and show as the connecting spinner does
+            .when_some(self.error.clone().filter(|e| snapshot.is_some() || !e.ends_with('…')), |el, err| match snapshot.is_some() {
+                true => el.child(div().p_4().text_color(theme.text_muted).child(err)),
+                false => el.child(welcome::unreachable(&theme, &err, self.place_label(cx))),
+            })
+            .when(snapshot.as_ref().is_some_and(|s| s.workspaces.is_empty()), |el| el.child(welcome::no_workspaces(&theme)))
+            .when(snapshot.is_none() && self.error.as_ref().is_none_or(|e| e.ends_with('…')) && self.connecting.is_some_and(|at| crate::ui::loader::due(at, window)), |el| {
                 el.child(
                     div()
                         .absolute()
@@ -347,7 +353,7 @@ impl Render for Shell {
                         .justify_center()
                         .gap(px(12.))
                         .child(crate::ui::loader::spinner(2.5, window))
-                        .child(div().text_size(px(12.)).text_color(theme.text_muted).child(format!("Connecting to {}…", self.place_label(cx)))),
+                        .child(div().text_size(px(12.)).text_color(theme.text_muted).child(self.error.clone().filter(|e| e.ends_with('…')).unwrap_or_else(|| format!("Connecting to {}…", self.place_label(cx))))),
                 )
             })
             .children(frames.into_iter().map(&pane_cell));
@@ -561,6 +567,7 @@ impl Render for Shell {
                 }
             }))
             .on_action(cx.listener(|this, _: &NewWorkspace, _, cx| this.new_workspace(cx)))
+            .on_action(cx.listener(|this, _: &OpenProject, _, cx| this.open_project(cx)))
             .on_action(cx.listener(|this, _: &SplitRight, w, cx| this.pane_command(w, cx, |pane_id| Command::Split { pane_id, down: false, cwd: None })))
             .on_action(cx.listener(|this, _: &SplitDown, w, cx| this.pane_command(w, cx, |pane_id| Command::Split { pane_id, down: true, cwd: None })))
             .on_action(cx.listener(|this, _: &ClosePane, w, cx| {

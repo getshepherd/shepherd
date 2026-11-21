@@ -115,7 +115,7 @@ fn input(session: &Session, feed: &Feed, message: &str) {
         (_, Some(key), ..) => drop(session.key(key)),
         (_, _, Some(text), _) => session.text(text),
         // the page's own trouble (no WebGL, a model that wouldn't load): it falls back on its own, this is for a log
-        (_, _, _, Some(note)) => eprintln!("shepherd: device 3D view: {note}"),
+        (_, _, _, Some(note)) => log::warn!("device 3D view: {note}"),
         _ => {}
     }
 }

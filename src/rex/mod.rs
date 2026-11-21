@@ -269,7 +269,7 @@ fn attach(server: &Endpoint, pane: &str, cols: u16, rows: u16, cell_px: (u32, u3
                 Command::Resize(cols, rows, cell_px) => block.fit(cols, rows, cell_px),
             };
             if let Err(e) = done {
-                eprintln!("shepherd: rex: {e:#}");
+                log::warn!("rex: {e:#}");
             }
         }
         data.close();

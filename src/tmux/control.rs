@@ -243,7 +243,7 @@ impl Hub {
                 let (hub, pane, id) = (self.clone(), pane.clone(), route.id);
                 std::thread::spawn(move || {
                     if let Err(e) = super::replay(&hub, &pane, id) {
-                        eprintln!("shepherd: tmux: {e:#}"); // the pane has gone
+                        log::warn!("tmux: {e:#}"); // the pane has gone
                     }
                 });
             }

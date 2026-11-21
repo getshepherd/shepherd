@@ -129,6 +129,7 @@ pub(crate) fn action_icon(name: &str) -> &'static str {
         "NewTab" => "icons/plus.svg",
         "CloseTab" => "icons/close-circle.svg",
         "NewWorkspace" => "icons/add-circle.svg",
+        "OpenProject" => "icons/solar/folder-open.svg",
         "SplitRight" => "icons/split-columns.svg",
         "SplitDown" => "icons/split-rows.svg",
         "ClosePane" => "icons/close.svg",

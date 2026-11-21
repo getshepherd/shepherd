@@ -62,6 +62,8 @@ pub struct Settings {
     pub diff_tree: bool,
     /// Agents seen through to done, up to the count that asks for a GitHub star.
     pub agents_done: u32,
+    /// The welcome card was closed; it shows only while there is no settings file, and this writes one.
+    pub welcomed: bool,
     pub agent_sort: AgentSort,
     /// Which agents a browser tab's annotations can go to.
     pub annotation_agents: AgentScope,
@@ -428,6 +430,7 @@ impl Default for Settings {
             diff_wrap: false,
             diff_tree: false,
             agents_done: 0,
+            welcomed: false,
             agent_sort: AgentSort::default(),
             annotation_agents: AgentScope::default(),
             sidebar_style: SidebarStyle::default(),

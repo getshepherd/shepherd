@@ -132,8 +132,8 @@ fn remote_script(on: bool) -> String {
 pub fn sync_machine(target: String) {
     let on = installed();
     std::thread::spawn(move || match crate::herdr::ssh(&target, &remote_script(on)) {
-        Ok(out) if !out.status.success() => eprintln!("shepherd: agent skill on {target}: {}", String::from_utf8_lossy(&out.stderr).trim()),
-        Err(e) => eprintln!("shepherd: agent skill on {target}: {e}"),
+        Ok(out) if !out.status.success() => log::warn!("agent skill on {target}: {}", String::from_utf8_lossy(&out.stderr).trim()),
+        Err(e) => log::warn!("agent skill on {target}: {e}"),
         Ok(_) => {}
     });
 }

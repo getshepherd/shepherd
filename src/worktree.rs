@@ -223,7 +223,7 @@ fn removed(tree: &Worktree) {
 fn fire(event: &'static str, root: String, worktree: String) {
     std::thread::spawn(move || {
         if let Err(e) = run_hooks(event, &root, &worktree) {
-            eprintln!("shepherd: worktree hooks: {e:#}");
+            log::warn!("worktree hooks: {e:#}");
             if let Some(failures) = FAILURES.get() {
                 let _ = failures.send(format!("Worktree hook failed: {e:#}"));
             }

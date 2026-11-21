@@ -278,7 +278,7 @@ fn supervise(list: &[Extension]) {
             run.child = None;
             run.failures = if run.started.elapsed() < STEADY { run.failures + 1 } else { 1 };
             run.retry_at = now + pause(run.failures);
-            eprintln!("shepherd: extension {} exited; its log is {}", ext.name, ext.binary.with_file_name("log").display());
+            log::warn!("extension {} exited; its log is {}", ext.name, ext.binary.with_file_name("log").display());
         }
         // something else already serves it: a `serve` run by hand, or one a Shepherd that crashed left behind
         // ponytail: that one isn't restarted when its binary changes; it would be, killed by its pid from paddock's state
@@ -288,7 +288,7 @@ fn supervise(list: &[Extension]) {
         match serve(ext) {
             Ok(child) => (run.child, run.started) = (Some(child), now),
             Err(e) => {
-                eprintln!("shepherd: cannot start extension {}: {e}", ext.name);
+                log::warn!("cannot start extension {}: {e}", ext.name);
                 run.failures += 1;
                 run.retry_at = now + pause(run.failures);
             }

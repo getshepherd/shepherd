@@ -1236,7 +1236,7 @@ async fn pump(this: WeakEntity<PaneTerminal>, mut rx: UnboundedReceiver<SessionE
                             emulator.restore_selection(pane.emulator.selection_state(), shift);
                             pane.emulator = emulator;
                         }
-                        Err(e) => eprintln!("shepherd: a terminal's snapshot does not decode, so it starts blank: {e:#}"),
+                        Err(e) => log::warn!("a terminal's snapshot does not decode, so it starts blank: {e:#}"),
                     },
                     SessionEvent::MouseCapture(enabled) => pane.mouse_capture = enabled,
                     SessionEvent::KeyboardFlags(flags) => pane.keyboard_flags = flags,

@@ -315,7 +315,7 @@ pub fn serve(asked: futures::channel::mpsc::UnboundedSender<Asked>) {
     use std::os::unix::net::{UnixListener, UnixStream};
     let path = socket();
     if UnixStream::connect(&path).is_ok() {
-        eprintln!("shepherd: {} is another Shepherd's: agents' `shepherd browser` goes to it", path.display());
+        log::warn!("{} is another Shepherd's: agents' `shepherd browser` goes to it", path.display());
         return;
     }
     // a socket left by a Shepherd that quit
@@ -323,7 +323,7 @@ pub fn serve(asked: futures::channel::mpsc::UnboundedSender<Asked>) {
     let _ = path.parent().map(std::fs::create_dir_all);
     let listener = match UnixListener::bind(&path) {
         Ok(l) => l,
-        Err(e) => return eprintln!("shepherd: {}: {e}", path.display()),
+        Err(e) => return log::warn!("{}: {e}", path.display()),
     };
     // only this user's processes may run code in their pages
     {

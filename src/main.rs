@@ -16,6 +16,7 @@ fn main() {
     if args.first().is_some_and(|a| a == "skill") {
         std::process::exit(shepherd::agent_skill::cli(&args[1..]));
     }
+    shepherd::logs::init();
     let rt = tokio::runtime::Runtime::new().expect("tokio");
     let handle = rt.handle().clone();
     gpui_platform::application().with_assets(shepherd::assets::Assets).run(move |cx| {
@@ -24,6 +25,8 @@ fn main() {
         shepherd::ui::command_panel::init(cx);
         shepherd::assets::register_fonts(cx);
         let path = shepherd::settings::Settings::path();
+        // `SHEPHERD_WELCOME` shows the welcome card anyway (screenshots)
+        let first_run = !path.exists() || std::env::var_os("SHEPHERD_WELCOME").is_some();
         let (settings, error) = shepherd::settings::Settings::load(&path);
         shepherd::herdr::set_binary(settings.herdr_bin.clone());
         shepherd::hc::set_sync(settings.hc_sync);
@@ -31,10 +34,10 @@ fn main() {
         // a worktree hooks plugin and an agent skill an older Shepherd installed get this one's files
         std::thread::spawn(|| {
             if let Err(e) = shepherd::herdr::hooks::refresh() {
-                eprintln!("shepherd: worktree hooks: {e:#}");
+                log::warn!("worktree hooks: {e:#}");
             }
             if let Err(e) = shepherd::agent_skill::refresh() {
-                eprintln!("shepherd: agent skill: {e:#}");
+                log::warn!("agent skill: {e:#}");
             }
             shepherd::settings::prune_file_copies();
         });
@@ -45,6 +48,7 @@ fn main() {
         shepherd::bindings::follow_herdr_config(cx);
         cx.set_global(shepherd::settings::SettingsGlobal { settings, error, path });
         cx.on_action(|_: &shepherd::bindings::Quit, cx| cx.quit());
+        cx.on_action(|_: &shepherd::bindings::RevealLogs, cx| cx.reveal_path(&shepherd::logs::path()));
         // off macOS an app with no windows left has nothing to show: closing the last one quits, as GNOME expects
         if !cfg!(target_os = "macos") {
             cx.on_window_closed(|cx, _| {
@@ -79,6 +83,13 @@ fn main() {
         shepherd::notify::warn_if_denied(cx);
 
         shepherd::shell::Shell::open(handle.clone(), cx);
+        if first_run {
+            shepherd::shell::welcome(cx);
+        }
+        if let Some(why) = shepherd::logs::take_crash() {
+            let reveal: std::rc::Rc<dyn Fn(&mut gpui::App)> = std::rc::Rc::new(|cx| cx.reveal_path(&shepherd::logs::path()));
+            shepherd::ui::toast::info(cx, format!("Shepherd quit unexpectedly last time ({why}). Click to see the log."), Some(reveal));
+        }
         if std::env::var_os("SHEPHERD_SETTINGS").is_some() {
             shepherd::shell::Shell::toggle_settings(cx);
         }

@@ -22,6 +22,7 @@ app_actions! {
     NewTab: "New tab",
     CloseTab: "Close tab",
     NewWorkspace: "New workspace",
+    OpenProject: "Open a project folder as a workspace",
     SplitRight: "Split right",
     SplitDown: "Split down",
     ClosePane: "Close pane",
@@ -72,6 +73,7 @@ app_actions! {
     ToggleDevTools: "Page DevTools",
     CopyPageUrl: "Copy page URL, or the pull request's link",
     CopyPrNumber: "Copy pull request number",
+    RevealLogs: "Reveal Shepherd's log",
     Quit: "Quit",
 }
 
@@ -249,6 +251,7 @@ fn menus(secure_input: bool) -> Vec<gpui::Menu> {
         Menu::new("Shell").items([
             I::action("New Tab", NewTab),
             I::action("New Workspace", NewWorkspace),
+            I::action("Open Project…", OpenProject),
             I::separator(),
             I::action("Split Right", SplitRight),
             I::action("Split Down", SplitDown),
@@ -286,6 +289,7 @@ fn menus(secure_input: bool) -> Vec<gpui::Menu> {
             I::action("Focus Pane Up", FocusUp),
             I::action("Focus Pane Down", FocusDown),
         ]),
+        Menu::new("Help").items([I::action("Reveal Log", RevealLogs)]),
     ]
 }
 

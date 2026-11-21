@@ -506,7 +506,7 @@ pub fn read_message(r: &mut impl Read) -> io::Result<Option<ServerMessage>> {
             // a modelled message that does not decode: herdr's layout moved under the same protocol version
             static TOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             if payload.first().is_some_and(|&i| i <= LAST_MODELLED) && !TOLD.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                eprintln!("shepherd: herdr message {} does not decode, so it is skipped (another herdr version?): {e}", payload[0]);
+                log::warn!("herdr message {} does not decode, so it is skipped (another herdr version?): {e}", payload[0]);
             }
             Ok(None)
         }

@@ -160,7 +160,7 @@ impl Tmux {
         self.controls.lock().unwrap().retain(|session, _| sessions.contains(session));
         for session in sessions {
             if let Err(e) = self.control(session) {
-                eprintln!("shepherd: tmux: {e:#}");
+                log::warn!("tmux: {e:#}");
             }
         }
     }

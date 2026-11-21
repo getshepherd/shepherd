@@ -546,7 +546,7 @@ mod webkit {
         if path.starts_with(super::dir())
             && let Err(e) = super::prepare(&path)
         {
-            eprintln!("shepherd: couldn't put the shim into browser extension {}: {e}", path.display());
+            log::warn!("couldn't put the shim into browser extension {}: {e}", path.display());
         }
         let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&path.to_string_lossy()), true);
         let at = path.clone();
@@ -565,7 +565,7 @@ mod webkit {
                     }
                     Ok(None) => {}
                     Err(why) => {
-                        eprintln!("shepherd: browser extension {} didn't load: {why}", at.display());
+                        log::warn!("browser extension {} didn't load: {why}", at.display());
                         state.errors.insert(at.clone(), why);
                     }
                 }

@@ -259,7 +259,7 @@ pub fn update(cx: &mut App, change: impl FnOnce(&mut Settings)) {
         cx.defer(move |cx| {
             for window in cx.windows() {
                 if let Err(e) = window.update(cx, |_, window, _| window.set_background_appearance(background)) {
-                    eprintln!("shepherd: cannot change a window's background: {e:#}");
+                    log::warn!("cannot change a window's background: {e:#}");
                 }
             }
         });

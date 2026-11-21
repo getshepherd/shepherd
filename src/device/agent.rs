@@ -64,7 +64,7 @@ pub fn publish(open: &[(String, &Device)], last: &mut String) {
     let written = std::fs::create_dir_all(file.parent().unwrap_or(&file)).and_then(|_| std::fs::write(&tmp, &json)).and_then(|_| std::fs::rename(&tmp, &file));
     match written {
         Ok(()) => *last = json,
-        Err(e) => eprintln!("shepherd: {}: {e}", file.display()),
+        Err(e) => log::warn!("{}: {e}", file.display()),
     }
 }
 

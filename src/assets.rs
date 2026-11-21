@@ -13,7 +13,7 @@ const FONTS: [&[u8]; 5] = [
 /// Adds Geist and Geist Mono; without them gpui falls back to the system font.
 pub fn register_fonts(cx: &App) {
     if let Err(e) = cx.text_system().add_fonts(FONTS.iter().map(|f| Cow::Borrowed(*f)).collect()) {
-        eprintln!("shepherd: cannot load the bundled fonts: {e:#}");
+        log::warn!("cannot load the bundled fonts: {e:#}");
     }
 }
 

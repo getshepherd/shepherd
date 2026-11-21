@@ -17,6 +17,7 @@ pub mod extensions;
 pub mod files;
 pub mod hc;
 pub mod herdr;
+pub mod logs;
 pub mod mock;
 pub mod model;
 pub mod notify;
