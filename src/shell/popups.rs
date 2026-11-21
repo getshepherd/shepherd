@@ -1120,6 +1120,35 @@ impl Shell {
                             if let Some(m) = this.pane_menu.as_mut() { m.close() }
                             cx.notify();
                         }))
+                        .children({
+                            // Copy while the pane has a selection, then Paste; both as their keys do
+                            let terminal = self.panes.get(&pane_id).cloned();
+                            let selection = terminal.as_ref().and_then(|t| t.read(cx).selection_text());
+                            let key = |k: &str| crate::ui::settings::display_chord(&if cfg!(target_os = "macos") { format!("cmd-{k}") } else { format!("ctrl-shift-{k}") });
+                            let clip = [
+                                selection.map(|text| ("pane-menu-copy", "icons/solar/copy.svg", "Copy", key("c"), ClipAction::Copy(text))),
+                                terminal.as_ref().map(|_| ("pane-menu-paste", "icons/solar/clipboard-paste.svg", "Paste", key("v"), ClipAction::Paste)),
+                            ];
+                            let rows: Vec<_> = clip.into_iter().flatten().map(|(id, icon, label, chord, action)| {
+                                let terminal = terminal.clone();
+                                row(theme, false, id)
+                                    .h(px(28.))
+                                    .rounded(px(6.))
+                                    .child(crate::ui::icon(icon, 14., theme.text_muted))
+                                    .child(div().flex_1().child(label))
+                                    .child(div().text_size(px(11.)).text_color(theme.text_faint).child(chord))
+                                    .on_pick(at, cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        if let Some(m) = this.pane_menu.as_mut() { m.close() }
+                                        match &action {
+                                            ClipAction::Copy(text) => cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone())),
+                                            ClipAction::Paste => if let Some(t) = &terminal { t.update(cx, |t, cx| t.paste_clipboard(cx)) },
+                                        }
+                                    }))
+                                    .into_any_element()
+                            }).collect();
+                            let separator = (!rows.is_empty()).then(|| div().mx(px(-4.)).my(px(4.)).h(px(1.)).bg(theme.border).into_any_element());
+                            rows.into_iter().chain(separator)
+                        })
                         .children(items.into_iter().enumerate().flat_map(|(i, (action, make))| {
                             let unzoom = zoomed && action == "ToggleZoom";
                             let label = if unzoom { "Unzoom pane" } else { ACTIONS.iter().find(|(a, _)| *a == action).map_or(action, |(_, l)| l) };
@@ -1162,6 +1191,12 @@ impl Shell {
             .with_priority(1)
         }))
     }
+}
+
+/// What the pane menu's Copy and Paste do: Copy takes the selection as it was when the menu opened.
+enum ClipAction {
+    Copy(String),
+    Paste,
 }
 
 /// The New session dialog's fields: one 14 px line in a bordered box.

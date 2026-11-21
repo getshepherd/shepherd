@@ -790,6 +790,40 @@ impl PaneTerminal {
         }
     }
 
+    /// The selected text, which Cmd+C (Ctrl+Shift+C elsewhere) and the pane's menu copy.
+    pub fn selection_text(&self) -> Option<String> {
+        self.emulator.selection_text()
+    }
+
+    /// Pastes the clipboard, as Cmd+V (Ctrl+Shift+V elsewhere) and the pane's menu do.
+    pub fn paste_clipboard(&mut self, cx: &mut Context<Self>) {
+        // ponytail: always bracketed; herdr's frames do not tell us whether the app asked for it.
+        if let Some(item) = cx.read_from_clipboard() {
+            let image = item.entries().iter().find_map(|e| match e {
+                // the formats herdr saves under their own extension
+                gpui::ClipboardEntry::Image(image)
+                    if matches!(image.format, gpui::ImageFormat::Png | gpui::ImageFormat::Jpeg | gpui::ImageFormat::Gif | gpui::ImageFormat::Webp | gpui::ImageFormat::Bmp) =>
+                {
+                    Some(image)
+                }
+                _ => None,
+            });
+            // a herdr machine's apps cannot read the Mac's clipboard: herdr saves the image there and pastes its path
+            let remote = crate::settings::SettingsGlobal::of(cx).settings.herdr_machine.is_some();
+            match item.text() {
+                Some(text) => self.input(&paste_bytes(&text, true), cx),
+                None if remote
+                    && !self.observing
+                    && image.is_some_and(|i| self.session.as_ref().is_some_and(|s| s.paste_image(i.format.extension(), &i.bytes))) =>
+                {
+                    self.typed(cx)
+                }
+                // an image: ctrl-v, the key agent TUIs (Claude Code, Codex) read the clipboard's image on
+                None => self.input(b"\x16", cx),
+            }
+        }
+    }
+
     /// Pastes `text` as a paste from the clipboard would, without Enter: it waits in the app's prompt.
     pub fn paste(&mut self, text: &str, cx: &mut Context<Self>) {
         self.input(&paste_bytes(text, true), cx);
@@ -846,31 +880,7 @@ impl PaneTerminal {
             return;
         }
         if ks.key == "v" && app_shortcut(mods) {
-            // ponytail: always bracketed; herdr's frames do not tell us whether the app asked for it.
-            if let Some(item) = cx.read_from_clipboard() {
-                let image = item.entries().iter().find_map(|e| match e {
-                    // the formats herdr saves under their own extension
-                    gpui::ClipboardEntry::Image(image)
-                        if matches!(image.format, gpui::ImageFormat::Png | gpui::ImageFormat::Jpeg | gpui::ImageFormat::Gif | gpui::ImageFormat::Webp | gpui::ImageFormat::Bmp) =>
-                    {
-                        Some(image)
-                    }
-                    _ => None,
-                });
-                // a herdr machine's apps cannot read the Mac's clipboard: herdr saves the image there and pastes its path
-                let remote = crate::settings::SettingsGlobal::of(cx).settings.herdr_machine.is_some();
-                match item.text() {
-                    Some(text) => self.input(&paste_bytes(&text, true), cx),
-                    None if remote
-                        && !self.observing
-                        && image.is_some_and(|i| self.session.as_ref().is_some_and(|s| s.paste_image(i.format.extension(), &i.bytes))) =>
-                    {
-                        self.typed(cx)
-                    }
-                    // an image: ctrl-v, the key agent TUIs (Claude Code, Codex) read the clipboard's image on
-                    None => self.input(b"\x16", cx),
-                }
-            }
+            self.paste_clipboard(cx);
             cx.stop_propagation();
             return;
         }

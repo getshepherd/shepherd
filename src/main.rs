@@ -19,7 +19,10 @@ fn main() {
     shepherd::logs::init();
     let rt = tokio::runtime::Runtime::new().expect("tokio");
     let handle = rt.handle().clone();
-    gpui_platform::application().with_assets(shepherd::assets::Assets).run(move |cx| {
+    let app = gpui_platform::application().with_assets(shepherd::assets::Assets);
+    let (link_tx, mut links) = tokio::sync::mpsc::unbounded_channel::<String>();
+    app.on_open_urls(move |urls| urls.into_iter().for_each(|url| drop(link_tx.send(url))));
+    app.run(move |cx| {
         gpui_base::init(cx);
         shepherd::notify::set_app_icon();
         shepherd::ui::command_panel::init(cx);
@@ -99,45 +102,33 @@ fn main() {
         // opens its Tools panel, `:tools:overlay` the accessibility overlay too, `:text-size` the rail's Text size menu.
         // `extension:<name>` opens that extension's page in the right panel.
         if let Ok(which) = std::env::var("SHEPHERD_PANEL") {
-            // `review:timeline` opens the review panel on its Timeline tab, `review:menu` with its "…" menu open
-            let review = which.strip_prefix("review").map(|tab| tab.trim_start_matches(':').to_string());
-            use shepherd::ui::command_panel::Kind;
-            let device = which.starts_with("device").then(|| which.clone());
-            let kind = match which.as_str() {
-                "agents" => Kind::Agents,
-                "workspaces" => Kind::Workspaces,
-                "sessions" => Kind::Sessions,
-                _ => Kind::Commands,
-            };
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
                 cx.update(|cx| {
                     let Some(window) = cx.windows().into_iter().find_map(|w| w.downcast::<shepherd::shell::Shell>()) else { return };
-                    let _ = window.update(cx, |shell, window, cx| match (&device, &review, which.as_str()) {
-                        (Some(key), _, _) => shell.show_devices(key, cx),
-                        (None, Some(tab), _) => {
-                            shell.toggle_review(window, cx);
-                            shell.show_review_tab(tab, window, cx);
-                        }
-                        (None, None, "browser") => shell.open_blank_tab(None, window, cx),
-                        (None, None, "browser-agent") => shell.show_agent_driving(window, cx),
-                        (None, None, "browser-menu") => {
-                            shell.open_blank_tab(None, window, cx);
-                            shell.open_browser_menu(cx);
-                        }
-                        (None, None, tab) if tab.starts_with("browser:") => shell.open_blank_tab(Some(tab["browser:".len()..].to_string()), window, cx),
-                        (None, None, "diffs") => shell.toggle_diff(window, cx),
-                        (None, None, ext) if ext.starts_with("extension:") => shell.add_extension_surface(&ext["extension:".len()..], window, cx),
-                        (None, None, files) if files.starts_with("file") => shell.show_files(files, window, cx),
-                        (None, None, "usage") => shell.open_usage_menu(window, cx),
-                        (None, None, "projects") => shell.open_project_menu(cx),
-                        (None, None, "rename") => shell.rename_shown_workspace(window, cx),
-                        (None, None, _) => shell.toggle_command_panel(kind, window, cx),
-                    });
+                    let _ = window.update(cx, |shell, window, cx| shell.open_panel(&which, window, cx));
                 })
             })
             .detach();
         }
+        // `shepherd://` links (shell/links.rs), the first of them perhaps the one that launched the app: each waits
+        // for the window and its first snapshot
+        cx.spawn(async move |cx| {
+            while let Some(url) = links.recv().await {
+                for _ in 0..50 {
+                    let followed = cx.update(|cx| {
+                        let Some(window) = cx.windows().into_iter().find_map(|w| w.downcast::<shepherd::shell::Shell>()) else { return false };
+                        window.update(cx, |shell, window, cx| shell.follow_link(&url, window, cx)).unwrap_or(false)
+                    });
+                    if followed {
+                        cx.update(|cx| cx.activate(true));
+                        break;
+                    }
+                    cx.background_executor().timer(std::time::Duration::from_millis(200)).await;
+                }
+            }
+        })
+        .detach();
         cx.activate(true);
     });
     drop(rt);

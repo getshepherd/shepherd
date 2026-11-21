@@ -31,6 +31,7 @@ mod file_editor;
 mod files;
 mod floating;
 mod layer;
+mod links;
 mod merge;
 mod motion;
 mod pane_drag;

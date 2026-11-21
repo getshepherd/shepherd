@@ -32,6 +32,11 @@ cat > "$app/Contents/Info.plist" <<EOF
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSUserNotificationAlertStyle</key><string>alert</string>
+	<key>CFBundleURLTypes</key>
+	<array><dict>
+		<key>CFBundleURLName</key><string>dev.freethinkel.shepherd</string>
+		<key>CFBundleURLSchemes</key><array><string>shepherd</string></array>
+	</dict></array>
 </dict>
 </plist>
 EOF
