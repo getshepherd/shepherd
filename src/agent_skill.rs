@@ -67,6 +67,12 @@ pub fn cli(args: &[String]) -> i32 {
     let skills = crate::extensions::skills(&crate::extensions::root());
     let named = args.first().map(String::as_str);
     if let Some((_, skill)) = named.filter(|n| !BACKENDS.iter().any(|(b, _)| b == n)).and_then(|n| skills.iter().find(|(name, _)| name == n)) {
+        // an extension's binary lives in its own folder, not on PATH, so `tasks …` as its skill writes it would not run
+        let binary = crate::extensions::scan(&crate::extensions::root()).into_iter().find(|e| Some(e.name.as_str()) == named).map(|e| e.binary);
+        if let Some(binary) = binary {
+            let name = named.unwrap_or_default();
+            println!("`{name}` below is `{}`, which isn't on PATH: run it by that path.\n", binary.display());
+        }
         println!("{skill}");
         return 0;
     }
@@ -83,9 +89,20 @@ pub fn cli(args: &[String]) -> i32 {
     }
 }
 
-/// The SKILL.md each folder gets: run `exe skill`.
-fn stub(exe: &Path) -> String {
+/// The SKILL.md each folder gets: run `exe skill`. Its description names the extensions installed, since an agent
+/// loads a skill by its description: one that opens a PR has to recognise `tasks` there, or it never reads its skill.
+fn stub(exe: &Path, extensions: &[(String, String)]) -> String {
     let exe = exe.to_string_lossy().replace('\'', r"'\''");
+    let named = if extensions.is_empty() {
+        String::new()
+    } else {
+        let list: Vec<String> = extensions.iter().map(|(name, what)| format!("`{name}` ({})", what.trim_end_matches('.'))).collect();
+        format!(
+            " Use it too whenever the work touches one of them (a task to track, a PR or MR you open, something to do later or on \
+             a schedule), to learn its CLI: {}.",
+            list.join(", ")
+        )
+    };
     format!(
         "---\nname: shepherd\ndescription: Subagents as interactive `claude` or `codex` in their own terminals of the multiplexer Shepherd runs on \
          (herdr, Rex, hc or tmux), where the user sees each one and can take it over. Use whenever work goes to another agent: a new agent the \
@@ -94,7 +111,7 @@ fn stub(exe: &Path) -> String {
          read a page and click, fill, press keys and wait in it, run JavaScript, read the console and requests, set the viewport, take \
          screenshots; use it instead of other browser tools \
          whenever the page is one the user sees in Shepherd or should see there. Also lists the user's Shepherd extensions (local tools with a \
-         page in Shepherd and a CLI) and their skills.\n---\n\
+         page in Shepherd and a CLI) and their skills.{named}\n---\n\
          {HEAD}\n\n\
          Run `'{exe}' skill` and follow the guide it prints. It comes from the installed Shepherd and gives the commands of the backend this \
          terminal runs on, and the extensions you can use.\n"
@@ -164,6 +181,9 @@ pub fn set(on: bool) -> io::Result<()> {
 
 /// `exe`: the binary to point at, `None` to take the skill out.
 fn set_in(home: &Path, exe: Option<&Path>) -> io::Result<()> {
+    // ponytail: every extension by its own description, those without a skill too; ask each for its skill (a process
+    // each) if one without turns up
+    let extensions: Vec<(String, String)> = crate::extensions::scan(&crate::extensions::root()).into_iter().map(|e| (e.name, e.description)).collect();
     for dir in dirs(home) {
         if dir.exists() && !ours(&dir) {
             continue;
@@ -175,7 +195,7 @@ fn set_in(home: &Path, exe: Option<&Path>) -> io::Result<()> {
         }
         if let Some(exe) = exe {
             std::fs::create_dir_all(&dir)?;
-            std::fs::write(dir.join("SKILL.md"), stub(exe))?;
+            std::fs::write(dir.join("SKILL.md"), stub(exe, &extensions))?;
         }
     }
     Ok(())
@@ -190,6 +210,14 @@ pub fn refresh() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_stub_names_the_extensions_in_its_description() {
+        let description = |s: String| s.lines().find(|l| l.starts_with("description:")).unwrap().to_string();
+        assert!(!description(stub(Path::new("/s"), &[])).contains("touches one of them"));
+        let named = description(stub(Path::new("/s"), &[("tasks".into(), "A task tracker.".into())]));
+        assert!(named.ends_with("to learn its CLI: `tasks` (A task tracker)."), "{named}");
+    }
 
     #[test]
     fn extensions_with_skills_are_listed_by_their_description() {

@@ -376,7 +376,9 @@ pub fn uninstall(ext: &Extension) -> Result<(), String> {
     if let Some(mut run) = runs.remove(&ext.name) {
         stop(&mut run);
     }
-    run(&ext.binary, &["uninstall"])
+    run(&ext.binary, &["uninstall"])?;
+    // the agent skill's description names the extensions installed
+    crate::agent_skill::refresh().map_err(|e| e.to_string())
 }
 
 /// `<binary> <args>`, or what it said when it failed.
@@ -485,7 +487,8 @@ pub fn install(release: &Release, start: &str) -> Result<(), String> {
     }
     run(&path, &["install", "--start", start])?;
     let source = Source { repo: release.repo.clone(), tag: release.tag.clone() };
-    note_source(&root(), since, &source).map_err(|e| e.to_string())
+    note_source(&root(), since, &source).map_err(|e| e.to_string())?;
+    crate::agent_skill::refresh().map_err(|e| e.to_string())
 }
 
 /// Writes `source` into the folder of the extension installed since `since`: its folder is named by the binary
