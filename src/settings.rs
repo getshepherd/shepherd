@@ -508,6 +508,19 @@ pub fn cache_dir() -> PathBuf {
     std::env::var_os("XDG_CACHE_HOME").map_or_else(|| home().join(".cache"), PathBuf::from).join("shepherd")
 }
 
+/// Removes the file copies (`cache_dir()/files/<hash>/`, made to show images and open files) none of which was written
+/// in a week. Run at launch, before anything shows one, so no copy in view goes.
+pub fn prune_file_copies() {
+    let week = std::time::Duration::from_secs(7 * 24 * 3600);
+    let Ok(dirs) = std::fs::read_dir(cache_dir().join("files")) else { return };
+    for dir in dirs.flatten().map(|d| d.path()).filter(|p| p.is_dir()) {
+        let newest = std::fs::read_dir(&dir).into_iter().flatten().flatten().filter_map(|f| f.metadata().ok()?.modified().ok()).max();
+        if newest.is_none_or(|t| t.elapsed().is_ok_and(|age| age > week)) {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+}
+
 impl Settings {
     /// `SHEPHERD_SETTINGS_FILE` runs a second Shepherd with its own settings (a demo session, say).
     pub fn path() -> PathBuf {

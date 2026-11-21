@@ -341,7 +341,6 @@ fn herdr_keeps(chord: &str, shepherd: &[(String, String)]) -> bool {
 /// own: a chord `shepherd` uses stays Shepherd's, a page's key aside.
 fn rebind_herdr(cx: &mut App, shepherd: &[(String, String)]) {
     use crate::herdr::keys::Bind;
-    // ponytail: read on rebind (start, Settings), not watched; a config.toml edit takes a restart
     let config = crate::herdr::HerdrConfig::load(&crate::herdr::config_path()).unwrap_or_default();
     let next: Vec<_> = crate::herdr::keys::bindings(&config)
         .into_iter()
@@ -360,6 +359,27 @@ fn rebind_herdr(cx: &mut App, shepherd: &[(String, String)]) {
     }).flatten());
     cx.bind_keys(bindings);
     cx.set_global(HerdrBindings(next.into_iter().map(|(_, chord)| chord).collect()));
+}
+
+/// Binds herdr's keymap again whenever its config.toml changes, so an edit there takes no restart. herdr reads the
+/// file itself only at its own start, but Shepherd's chords for its actions are Shepherd's to bind.
+/// ponytail: the file's mtime every 2 s; a watcher if 2 s ever feels slow
+pub fn follow_herdr_config(cx: &mut App) {
+    let modified = || std::fs::metadata(crate::herdr::config_path()).and_then(|m| m.modified()).ok();
+    let mut seen = modified();
+    cx.spawn(async move |cx| loop {
+        cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
+        let now = modified();
+        if now == seen {
+            continue;
+        }
+        seen = now;
+        cx.update(|cx| {
+            let shepherd = cx.try_global::<ActiveBindings>().map(|a| a.0.clone()).unwrap_or_default();
+            rebind_herdr(cx, &shepherd);
+        });
+    })
+    .detach();
 }
 
 #[cfg(test)]

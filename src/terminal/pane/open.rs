@@ -61,8 +61,7 @@ pub(super) async fn download(url: &str) -> Option<PathBuf> {
 }
 
 /// `bytes` as a file named `name` in the cache, under their hash: gpui keeps an image by its path, so a changed file
-/// needs a new one.
-// ponytail: copies pile up in the cache until it is cleared; prune by age if they ever matter.
+/// needs a new one. Copies a week old go at the next launch (`settings::prune_file_copies`).
 pub(super) async fn cache_copy(name: &str, bytes: Vec<u8>) -> Option<PathBuf> {
     let hash = {
         use std::hash::{Hash, Hasher};
@@ -349,28 +348,54 @@ pub fn nvim_command(editor: &str, path: &Path, line: Option<u32>, col: Option<u3
 }
 
 impl PaneTerminal {
-    /// The link under a window position: its row, cells and target.
-    pub(super) fn link_under(&self, position: gpui::Point<Pixels>) -> Option<(usize, Range<usize>, Link)> {
+    /// The link under a window position: its cells, a range per row and top first, and its target. A link a soft
+    /// wrap cut across rows is found and opened whole.
+    pub(super) fn link_under(&self, position: gpui::Point<Pixels>) -> Option<(Vec<(usize, Range<usize>)>, Link)> {
         let g = self.geometry?;
         if !g.bounds.contains(&position) {
             return None;
         }
         let (row, col, _, _) = self.hit(position)?;
+        let (row, col) = (row as usize, col as usize);
         // An OSC 8 hyperlink wins over the text under it.
-        let osc8 = self.emulator.hyperlink_at(row as usize, col as usize);
+        let osc8 = self.emulator.hyperlink_at(row, col);
         if let Some((cells, link)) = osc8.and_then(|(cells, uri)| Some((cells, hyperlink(&uri)?))) {
-            return Some((row as usize, cells, link));
+            return Some((cells, link));
         }
-        let cells = self.emulator.line(row as usize);
-        let (chars, cols) = row_chars(&cells);
-        let at = cols.iter().rposition(|&c| c <= col as usize)?;
+        let lines = self.emulator.lines();
+        let wraps = |r: usize| self.emulator.wraps(r);
+        let reach = crate::terminal::emulator::MAX_WRAPPED_ROWS / 2;
+        let mut top = row;
+        while top > 0 && row - top < reach && wraps(top - 1) {
+            top -= 1;
+        }
+        let mut end = row + 1;
+        while end < lines.len() && end - row < reach && wraps(end - 1) {
+            end += 1;
+        }
+        // the joined line's chars, and each one's row and cell
+        let (mut chars, mut at_of) = (Vec::new(), Vec::new());
+        for r in top..end {
+            let (c, cols) = row_chars(lines.get(r)?);
+            chars.extend(c);
+            at_of.extend(cols.into_iter().map(|col| (r, col)));
+        }
+        let at = at_of.iter().rposition(|&p| p <= (row, col))?;
         let (chars_range, link) = link_at(&chars, at)?;
-        Some((row as usize, cell_range(&cells, &cols, chars_range), link))
+        let mut cells: Vec<(usize, Range<usize>)> = Vec::new();
+        for &(r, c) in &at_of[chars_range] {
+            let to = c + 1 + usize::from(lines[r][c].wide);
+            match cells.last_mut() {
+                Some((last, range)) if *last == r => range.end = to,
+                _ => cells.push((r, c..to)),
+            }
+        }
+        Some((cells, link))
     }
 
     pub(super) fn update_hover(&mut self, cmd: bool, cx: &mut Context<Self>) {
         // No links under the image dialog: Cmd, still held from the click that opened it, would point at them.
-        let hover = self.pointer.filter(|_| cmd && self.preview.is_none() && self.reader.is_none()).and_then(|p| self.link_under(p)).map(|(row, cells, _)| (row, cells));
+        let hover = self.pointer.filter(|_| cmd && self.preview.is_none() && self.reader.is_none()).and_then(|p| self.link_under(p)).map(|(cells, _)| cells);
         if hover != self.hover {
             self.hover = hover;
             cx.notify();

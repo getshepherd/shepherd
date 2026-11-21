@@ -1,4 +1,4 @@
-# Every push to main lints and tests Shepherd on macOS, Linux and Windows. When Cargo.toml's version has no release
+# Every push to main and every pull request lints and tests Shepherd on macOS, Linux and Windows. When Cargo.toml's version has no release
 # yet, the run also builds Shepherd, tags v<version> and publishes a universal (arm64 + x86_64) Shepherd as a zip and
 # a dmg, each Linux architecture (x86_64, aarch64) as a tar.gz, a .deb and an .rpm, and each Windows architecture as a
 # zip with the exe: bump the version to release. With the signing secrets set the app is signed
@@ -8,14 +8,17 @@ name: release
 on:
   push:
     branches: [main]
+  # the same lint and tests, so a PR shows what would break main before it lands; it never builds or releases
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: release
-  cancel-in-progress: false
+  # a PR's run waits on none but its own, and a newer push to the PR replaces it; main's runs queue as before
+  group: release-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Actions keeps 10 GB of cache a repository, oldest out first, and the jobs' rust-caches outgrew it, so each run pushed
 # out the others' and macOS built cold (~40 min). Without debug info a dev and test target is a fraction of the size.
@@ -34,7 +37,9 @@ jobs:
       - uses: actions/checkout@v4
       - id: check
         run: |
-          if gh release view "v$(make -s version)" >/dev/null 2>&1; then echo new=false; else echo new=true; fi >> "$GITHUB_OUTPUT"
+          # a pull request only lints and tests, even one that bumps the version
+          if [ "$GITHUB_EVENT_NAME" != push ] && [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] \
+            || gh release view "v$(make -s version)" >/dev/null 2>&1; then echo new=false; else echo new=true; fi >> "$GITHUB_OUTPUT"
 
   macos:
     needs: version

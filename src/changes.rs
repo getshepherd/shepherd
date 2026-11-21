@@ -1558,9 +1558,10 @@ pub struct BranchState<'a> {
     pub remote: bool,
     /// The branch has a PR or MR (any state); `None` while gh or glab haven't said.
     pub pr: Option<bool>,
+    /// The repo's default branch, `origin/HEAD`'s target; `None` when origin has none, and then `main` and `master` are.
+    pub default: Option<&'a str>,
 }
 
-// ponytail: the default branch by name; a repo whose default is `develop` gets offered a PR from it, and gh says why not.
 /// Commit while anything's uncommitted, then push, then the PR: open it once it's there. Nothing on a detached HEAD, a
 /// repo without an origin, or the default branch once it's pushed.
 pub fn next_step(s: BranchState) -> Option<GitStep> {
@@ -1574,10 +1575,26 @@ pub fn next_step(s: BranchState) -> Option<GitStep> {
     if s.ahead > 0 {
         return Some(GitStep::Push);
     }
-    if matches!(branch, "main" | "master") {
+    let default = match s.default {
+        Some(default) => branch == default,
+        None => matches!(branch, "main" | "master"),
+    };
+    if default {
         return None;
     }
     Some(if s.pr? { GitStep::OpenPr } else { GitStep::CreatePr })
+}
+
+/// `dir`'s default branch, for the cache: a type of its own, so it doesn't share the cache of other strings by dir.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefaultBranch(pub Option<String>);
+
+/// `origin/HEAD`'s target in `dir`, as `next_step` takes it. A clone sets `origin/HEAD`; a repo whose origin was added
+/// by hand has none until `git remote set-head origin -a`.
+pub fn find_default_branch(dir: &str) -> Option<DefaultBranch> {
+    let out = crate::herdr::git(dir, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).ok()?;
+    let short = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Some(DefaultBranch(out.status.success().then(|| short.strip_prefix("origin/").map(str::to_string)).flatten()))
 }
 
 /// The repo's origin, by its host: what the PR's made with.
@@ -1588,12 +1605,12 @@ pub enum Origin {
     GitLab,
 }
 
-/// For the cache: `dir`'s origin. A GitHub Enterprise host without "github" in it is GitLab's, as the review panel has it.
+/// For the cache: `dir`'s origin, GitHub's or GitLab's as the review panel tells them apart.
 pub fn find_origin(dir: &str) -> Option<Origin> {
     let out = crate::herdr::git(dir, &["remote", "get-url", "origin"]).ok()?;
     let host = crate::ui::review::host(&String::from_utf8_lossy(&out.stdout));
     Some(match (out.status.success(), host) {
-        (true, Some(host)) if host.contains("github") => Origin::GitHub,
+        (true, Some(host)) if crate::ui::review::is_github(&host, dir) => Origin::GitHub,
         (true, Some(_)) => Origin::GitLab,
         _ => Origin::None,
     })
@@ -2452,7 +2469,7 @@ rename to new_name.rs
 
     #[test]
     fn the_button_commits_then_pushes_then_makes_the_pr_then_opens_it() {
-        let at = |dirty, upstream, ahead, pr| BranchState { dirty, branch: Some("feature"), upstream, ahead, remote: true, pr };
+        let at = |dirty, upstream, ahead, pr| BranchState { dirty, branch: Some("feature"), upstream, ahead, remote: true, pr, default: None };
         assert_eq!(next_step(at(true, true, 0, Some(true))), Some(GitStep::Commit));
         assert_eq!(next_step(at(false, false, 0, None)), Some(GitStep::Publish));
         assert_eq!(next_step(at(false, true, 2, Some(true))), Some(GitStep::Push));
@@ -2463,6 +2480,10 @@ rename to new_name.rs
         assert_eq!(next_step(BranchState { remote: false, ..at(false, false, 0, None) }), None);
         assert_eq!(next_step(BranchState { branch: None, ..at(false, false, 0, None) }), None);
         assert_eq!(next_step(BranchState { branch: Some("main"), ..at(false, true, 0, Some(false)) }), None);
+        // a repo whose default is `develop`: no PR from it, and `main` there is a branch like any
+        let develop = |branch| BranchState { branch: Some(branch), default: Some("develop"), ..at(false, true, 0, Some(false)) };
+        assert_eq!(next_step(develop("develop")), None);
+        assert_eq!(next_step(develop("main")), Some(GitStep::CreatePr));
         assert_eq!(next_step(BranchState { remote: false, ..at(true, false, 0, None) }), Some(GitStep::Commit));
     }
 

@@ -74,6 +74,17 @@ fn map_color(color: StyleColor, default: CellColor) -> CellColor {
     }
 }
 
+/// The line under an underlined cell, as SGR 4:n names them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnderlineStyle {
+    #[default]
+    Single,
+    Double,
+    Curly,
+    Dotted,
+    Dashed,
+}
+
 /// One rendered cell: char + colors + the flags paint cares about.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellSnapshot {
@@ -87,9 +98,8 @@ pub struct CellSnapshot {
     pub dim: bool,
     pub italic: bool,
     pub underline: bool,
-    /// The underline is curly (SGR 4:3): spelling and diagnostics.
-    // ponytail: double, dotted and dashed underlines draw as a single line.
-    pub undercurl: bool,
+    /// How `underline` is drawn (SGR 4:1 to 4:5); curly is for spelling and diagnostics.
+    pub underline_style: UnderlineStyle,
     pub strikethrough: bool,
     pub inverse: bool,
     pub hidden: bool,
@@ -531,7 +541,13 @@ impl Emulator {
                         dim: style.faint,
                         italic: style.italic,
                         underline: style.underline != Underline::None,
-                        undercurl: style.underline == Underline::Curly,
+                        underline_style: match style.underline {
+                            Underline::Double => UnderlineStyle::Double,
+                            Underline::Curly => UnderlineStyle::Curly,
+                            Underline::Dotted => UnderlineStyle::Dotted,
+                            Underline::Dashed => UnderlineStyle::Dashed,
+                            _ => UnderlineStyle::Single,
+                        },
                         strikethrough: style.strikethrough,
                         inverse: style.inverse,
                         hidden: style.invisible,
@@ -584,14 +600,36 @@ impl Emulator {
         (len > 0).then(|| String::from_utf8_lossy(&buf[..len]).into_owned())
     }
 
-    /// The OSC 8 hyperlink at a viewport cell: the cells around it on that row with the same URI, and the URI.
-    // ponytail: one row, like text links; a hyperlink wrapped onto the next row underlines one row at a time.
-    pub fn hyperlink_at(&self, viewport_row: usize, col: usize) -> Option<(std::ops::Range<usize>, String)> {
+    /// Whether a viewport row soft-wraps into the next: one line of the program's that the grid's width cut.
+    pub fn wraps(&self, viewport_row: usize) -> bool {
+        self.viewport_ref(viewport_row, 0).and_then(|r| r.row().ok()).is_some_and(|r| r.is_wrapped().unwrap_or(false))
+    }
+
+    /// The OSC 8 hyperlink at a viewport cell: the cells around it with the same URI, a range per row and top first,
+    /// on into the rows a soft wrap joins it to; and the URI.
+    pub fn hyperlink_at(&self, viewport_row: usize, col: usize) -> Option<(Vec<(usize, std::ops::Range<usize>)>, String)> {
         let uri = self.hyperlink(viewport_row, col)?;
-        let same = |c: &usize| self.hyperlink(viewport_row, *c).as_ref() == Some(&uri);
-        let start = (0..col).rev().take_while(same).last().unwrap_or(col);
-        let end = (col + 1..self.cols()).take_while(same).last().unwrap_or(col) + 1;
-        Some((start..end, uri))
+        let cols = self.cols();
+        let same = |row: usize, c: usize| self.hyperlink(row, c).as_ref() == Some(&uri);
+        let span = |row: usize, c: usize| {
+            let start = (0..c).rev().take_while(|&x| same(row, x)).last().unwrap_or(c);
+            let end = (c + 1..cols).take_while(|&x| same(row, x)).last().unwrap_or(c) + 1;
+            start..end
+        };
+        let mut spans = vec![(viewport_row, span(viewport_row, col))];
+        while let Some((row, cells)) = spans.first().cloned() {
+            if cells.start != 0 || row == 0 || spans.len() >= MAX_WRAPPED_ROWS || !self.wraps(row - 1) || !same(row - 1, cols - 1) {
+                break;
+            }
+            spans.insert(0, (row - 1, span(row - 1, cols - 1)));
+        }
+        while let Some((row, cells)) = spans.last().cloned() {
+            if cells.end != cols || row + 1 >= self.rows() || spans.len() >= MAX_WRAPPED_ROWS || !self.wraps(row) || !same(row + 1, 0) {
+                break;
+            }
+            spans.push((row + 1, span(row + 1, 0)));
+        }
+        Some((spans, uri))
     }
 
     /// Test/diagnostic helper: a viewport row as trimmed text (wide-char
@@ -609,6 +647,10 @@ impl Emulator {
         text
     }
 }
+
+/// How many rows a link joined by soft wraps reaches, its own included: a link longer than that is cut, so a row
+/// of one never walks the whole history.
+pub const MAX_WRAPPED_ROWS: usize = 16;
 
 /// A drag's cells, top-left first: the side of each end says whether its cell is in.
 fn simple_range(a: (GridPoint, Side), b: (GridPoint, Side), cols: usize) -> Option<(GridPoint, GridPoint)> {
@@ -813,11 +855,13 @@ mod tests {
     #[test]
     fn strikethrough_and_undercurl() {
         let mut e = emu(20, 2);
-        e.feed(b"\x1b[9mS\x1b[0m\x1b[4:3mC\x1b[0m\x1b[4mU");
+        e.feed(b"\x1b[9mS\x1b[0m\x1b[4:3mC\x1b[0m\x1b[4mU\x1b[4:2mD\x1b[4:4m.\x1b[4:5m-");
         let line = e.line(0);
         assert!(line[0].strikethrough && !line[0].underline);
-        assert!(line[1].underline && line[1].undercurl);
-        assert!(line[2].underline && !line[2].undercurl && !line[2].strikethrough);
+        assert!(line[1].underline && line[1].underline_style == UnderlineStyle::Curly);
+        assert!(line[2].underline && line[2].underline_style == UnderlineStyle::Single && !line[2].strikethrough);
+        let styles: Vec<_> = line[3..6].iter().map(|c| c.underline.then_some(c.underline_style)).collect();
+        assert_eq!(styles, [Some(UnderlineStyle::Double), Some(UnderlineStyle::Dotted), Some(UnderlineStyle::Dashed)]);
     }
 
     #[test]
@@ -1099,9 +1143,20 @@ mod tests {
         // A style change inside the link keeps it one span.
         let mut e = emu(30, 2);
         e.feed(b"see \x1b]8;;https://a.b\x1b\\li\x1b[1mnk\x1b]8;;\x1b\\ ok");
-        assert_eq!(e.hyperlink_at(0, 6), Some((4..8, "https://a.b".into())));
-        assert_eq!(e.hyperlink_at(0, 4).map(|h| h.0), Some(4..8));
+        assert_eq!(e.hyperlink_at(0, 6), Some((vec![(0, 4..8)], "https://a.b".into())));
+        assert_eq!(e.hyperlink_at(0, 4).map(|h| h.0), Some(vec![(0, 4..8)]));
         assert_eq!(e.hyperlink_at(0, 2), None);
         assert_eq!(e.hyperlink_at(0, 9), None);
+    }
+
+    #[test]
+    fn an_osc8_hyperlink_follows_a_soft_wrap() {
+        let mut e = emu(10, 3);
+        e.feed(b"see \x1b]8;;https://a.b\x1b\\0123456789\x1b]8;;\x1b\\ ok\r\n\x1b]8;;https://c.d\x1b\\x\x1b]8;;\x1b\\");
+        let link = Some((vec![(0, 4..10), (1, 0..4)], "https://a.b".into()));
+        assert_eq!(e.hyperlink_at(1, 2), link);
+        assert_eq!(e.hyperlink_at(0, 5), link);
+        // a hard line break ends it, even onto a link at the next row's start
+        assert_eq!(e.hyperlink_at(2, 0).map(|h| h.0), Some(vec![(2, 0..1)]));
     }
 }

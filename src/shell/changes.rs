@@ -2224,7 +2224,8 @@ impl Changes {
         let review = self.review_key().filter(|_| settled).and_then(|key| cached(&key, super::review::REVIEW_TTL, crate::ui::review::read_review, cx));
         let pr = review.as_ref().map(|r| matches!(r, crate::ui::review::Review::Found { request: Some(_), .. }));
         let branch = (!git.detached).then_some(git.branch.as_str());
-        let step = next_step(BranchState { dirty, branch, upstream: git.upstream, ahead: git.ahead, remote: origin != Origin::None, pr })?;
+        let default = cached(dir, POLL * 15, crate::changes::find_default_branch, cx).and_then(|d| d.0);
+        let step = next_step(BranchState { dirty, branch, upstream: git.upstream, ahead: git.ahead, remote: origin != Origin::None, pr, default: default.as_deref() })?;
         Some((step, git, review))
     }
 

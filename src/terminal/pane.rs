@@ -236,6 +236,9 @@ pub struct PaneTerminal {
     live: Option<Emulator>,
     /// The lines scrolled while the history is being read.
     history_pending: Option<i64>,
+    /// The text the history copy was made from, and the read that will make it afresh once output comes.
+    history_text: Option<String>,
+    _history_refresh: Option<Task<()>>,
     session: Option<Box<dyn Terminal>>,
     /// The size the backend gives the terminal, where it doesn't take the pane's ([`SessionEvent::Size`]).
     fixed: Option<(u16, u16)>,
@@ -281,7 +284,7 @@ pub struct PaneTerminal {
     search: Option<Search>,
     /// The pointer, and the link under it while Cmd is held: (row, cells).
     pointer: Option<gpui::Point<Pixels>>,
-    hover: Option<(usize, Range<usize>)>,
+    hover: Option<Vec<(usize, Range<usize>)>>,
     /// The cell a hover was last reported in to an app that captures the mouse: one report per cell crossed.
     hover_cell: Option<(u16, u16)>,
     /// The image a Cmd+click opened, in a dialog over the window until Esc, Space or a click outside it.
@@ -326,6 +329,8 @@ impl PaneTerminal {
             emulator: Emulator::new(80, 24),
             live: None,
             history_pending: None,
+            history_text: None,
+            _history_refresh: None,
             fixed: None,
             session: None,
             observing: false,
@@ -650,6 +655,7 @@ impl PaneTerminal {
                         let shift = history.history_lines() as isize - pane.emulator.history_lines() as isize;
                         history.restore_selection(pane.emulator.selection_state(), shift);
                         pane.live = Some(std::mem::replace(&mut pane.emulator, history));
+                        pane.history_text = Some(text);
                         pane.scroll_by(delta, None, cx);
                     }
                     None => pane.scroll_herdr(delta, None, cx),
@@ -660,10 +666,50 @@ impl PaneTerminal {
         None
     }
 
+    /// Output came while the history copy is shown: read it again a second later, at most once a second however
+    /// fast the output, so the copy grows under the lines being read and herdr isn't asked on every frame.
+    fn refresh_history_soon(&mut self, cx: &mut Context<Self>) {
+        if self._history_refresh.is_some() {
+            return;
+        }
+        let Some(PaneQueries(backend, rt)) = cx.try_global::<PaneQueries>() else { return };
+        let (backend, pane_id) = (backend.clone(), self.pane_id.clone());
+        let rt = rt.clone();
+        self._history_refresh = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_secs(1)).await;
+            let text = rt.spawn(async move { backend.mux.read(pane_id, 1000, true).await }).await.ok().and_then(Result::ok);
+            let _ = this.update(cx, |pane, cx| {
+                pane._history_refresh = None;
+                if let Some(text) = text {
+                    pane.refresh_history(text, cx);
+                }
+            });
+        }));
+    }
+
+    /// Makes the history copy afresh from `text`, the lines in view kept in view: they move up by the lines new
+    /// output added below and down by those that fell off herdr's read at the top.
+    fn refresh_history(&mut self, text: String, cx: &mut Context<Self>) {
+        let (Some(_), Some(old)) = (&self.live, &self.history_text) else { return };
+        let (cols, rows) = (self.emulator.cols(), self.emulator.rows());
+        let dropped = dropped_lines(old, &text) as isize;
+        let mut history = Emulator::with_history(&text, cols as u16, rows as u16);
+        // the row at the view's top, counted from the copy's oldest line, then in the new copy
+        let top = self.emulator.history_lines() as isize - self.emulator.display_offset() as isize - dropped;
+        let offset = (history.history_lines() as isize - top).clamp(0, history.history_lines() as isize);
+        history.restore_selection(self.emulator.selection_state(), -dropped);
+        history.scroll_to_offset(offset as usize);
+        self.emulator = history;
+        self.scroll.offset_from_bottom = offset as u32;
+        self.history_text = Some(text);
+        cx.notify();
+    }
+
     /// Back to the live grid: herdr is at its bottom all along.
-    // ponytail: the copy is not refreshed while it is shown; new output shows once you are back at the bottom
     fn leave_history(&mut self) {
         self.history_pending = None;
+        self.history_text = None;
+        self._history_refresh = None;
         if let Some(mut live) = self.live.take() {
             // a selection made in the copy comes back to the live grid on its text
             let shift = live.history_lines() as isize - self.emulator.history_lines() as isize;
@@ -692,8 +738,8 @@ impl PaneTerminal {
 
     pub fn active_grid_snapshot(&self, cx: &App) -> Option<GridSnapshot> {
         let mut lines = self.emulator.lines();
-        if let Some((row, cells)) = &self.hover {
-            // The hover was found on an older grid; output or a resize since may have shortened the row.
+        // The hover was found on an older grid; output or a resize since may have shortened a row.
+        for (row, cells) in self.hover.iter().flatten() {
             for cell in lines.get_mut(*row).and_then(|l| std::sync::Arc::make_mut(l).get_mut(cells.clone())).into_iter().flatten() {
                 cell.underline = true;
             }
@@ -967,7 +1013,7 @@ impl PaneTerminal {
         }
         window.focus(&self.focus, cx);
         claim(cx);
-        if let Some((_, _, link)) = self.link_under(event.position).filter(|_| link_modifier(&event.modifiers)) {
+        if let Some((_, link)) = self.link_under(event.position).filter(|_| link_modifier(&event.modifiers)) {
             self.open_link(link, cx);
             return;
         }
@@ -1173,6 +1219,9 @@ async fn pump(this: WeakEntity<PaneTerminal>, mut rx: UnboundedReceiver<SessionE
                     // answered the app's own queries.
                     SessionEvent::Frame(bytes) => {
                         drop(pane.live.as_mut().unwrap_or(&mut pane.emulator).feed(&bytes));
+                        if pane.live.is_some() {
+                            pane.refresh_history_soon(cx);
+                        }
                         if pane.session.as_ref().is_some_and(|s| s.raw()) {
                             pane.mouse_capture = pane.emulator.mouse_capture();
                             pane.keyboard_flags = pane.emulator.keyboard_flags();
@@ -1421,9 +1470,27 @@ impl Render for PaneTerminal {
     }
 }
 
+/// How many of `old`'s first lines are gone from `new`, a read of the same history taken later: herdr reads its
+/// newest lines only, so as output comes the oldest fall off. Each line is a row: herdr wraps them at the pane's width.
+fn dropped_lines(old: &str, new: &str) -> usize {
+    let old: Vec<&str> = old.split('\n').collect();
+    let new: Vec<&str> = new.split('\n').collect();
+    // the first few of `new`'s lines, where they begin in `old`; a probe found nowhere (the screen redrawn whole, a
+    // clear) moves nothing
+    let probe = &new[..new.len().min(3)];
+    (0..old.len()).find(|&i| old[i..].starts_with(probe)).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_lines_fall_off_the_top_as_output_comes() {
+        assert_eq!(dropped_lines("a\nb\nc\nd", "a\nb\nc\nd\ne"), 0);
+        assert_eq!(dropped_lines("a\nb\nc\nd\ne", "c\nd\ne\nf\ng"), 2);
+        assert_eq!(dropped_lines("a\nb", "x\ny"), 0);
+    }
 
     fn geometry(cols: u16, rows: u16) -> GridGeometry {
         GridGeometry {

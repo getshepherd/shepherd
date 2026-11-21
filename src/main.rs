@@ -36,11 +36,13 @@ fn main() {
             if let Err(e) = shepherd::agent_skill::refresh() {
                 eprintln!("shepherd: agent skill: {e:#}");
             }
+            shepherd::settings::prune_file_copies();
         });
         cx.set_global(settings.theme(cx.window_appearance()));
         shepherd::ui::follow_theme(cx);
         cx.observe_global::<shepherd::theme::Theme>(shepherd::ui::follow_theme).detach();
         shepherd::bindings::rebind(cx, &settings.keys);
+        shepherd::bindings::follow_herdr_config(cx);
         cx.set_global(shepherd::settings::SettingsGlobal { settings, error, path });
         cx.on_action(|_: &shepherd::bindings::Quit, cx| cx.quit());
         // off macOS an app with no windows left has nothing to show: closing the last one quits, as GNOME expects

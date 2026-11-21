@@ -55,6 +55,8 @@ struct Cache<T>(HashMap<String, Entry<T>>);
 
 struct Entry<T> {
     value: Option<T>,
+    /// When it was last asked for: one unasked for [`ENTRY_IDLE`] goes when a new key comes.
+    asked: Instant,
     fetched: Option<Instant>,
     busy: bool,
 }
@@ -67,15 +69,19 @@ impl<T> Default for Cache<T> {
 
 impl<T: 'static> Global for Cache<T> {}
 
-// ponytail: one entry per key ever shown, never evicted; prune if people cd through thousands of dirs.
+/// How long a cache entry nobody asks for is kept: a dir or branch long out of sight.
+const ENTRY_IDLE: Duration = Duration::from_secs(3600);
+
 /// The cached `fetch(key)`; runs it on a background thread when missing or older than `ttl`. A failed fetch
 /// keeps the last value.
 pub(crate) fn cached<T: Clone + PartialEq + Send + 'static>(key: &str, ttl: Duration, fetch: fn(&str) -> Option<T>, cx: &mut App) -> Option<T> {
-    let entry = cx
-        .default_global::<Cache<T>>()
-        .0
-        .entry(key.to_string())
-        .or_insert(Entry { value: None, fetched: None, busy: false });
+    let cache = &mut cx.default_global::<Cache<T>>().0;
+    if !cache.contains_key(key) {
+        // a fetch on its way finds its entry gone and drops what it brought
+        cache.retain(|_, e| e.asked.elapsed() < ENTRY_IDLE);
+    }
+    let entry = cache.entry(key.to_string()).or_insert(Entry { value: None, asked: Instant::now(), fetched: None, busy: false });
+    entry.asked = Instant::now();
     let value = entry.value.clone();
     if entry.busy || entry.fetched.is_some_and(|t| t.elapsed() < ttl) {
         return value;
@@ -658,20 +664,21 @@ fn read_spent(key: &str) -> Option<Spent> {
     read_local_spent(id)
 }
 
-// ponytail: one tail per session ever shown, never dropped; the lock is held while a transcript is read, so a first
-// read of a huge one holds up the others
+// ponytail: the lock is held while a transcript is read, so a first read of a huge one holds up the others
 /// The tokens of the session `id` here: its transcript (up to 100 MB) is found once, then read on from where the last
 /// read stopped, not whole each [`SPENT_TTL`].
 fn read_local_spent(id: &str) -> Option<Spent> {
     static TAILS: std::sync::Mutex<Option<HashMap<String, Tail>>> = std::sync::Mutex::new(None);
     let mut tails = TAILS.lock().unwrap();
     let tails = tails.get_or_insert_default();
+    tails.retain(|_, t| t.used.elapsed() < TAIL_IDLE);
     if !tails.contains_key(id) {
         let projects = std::env::home_dir()?.join(".claude/projects");
         let file = std::fs::read_dir(projects).ok()?.flatten().map(|d| d.path().join(format!("{id}.jsonl"))).find(|f| f.is_file())?;
         tails.insert(id.into(), Tail::new(file.to_string_lossy().into()));
     }
     let tail = tails.get_mut(id)?;
+    tail.used = Instant::now();
     if read_on(tail).is_none() {
         tails.remove(id); // gone: found afresh next time
         return None;
@@ -702,21 +709,31 @@ struct Tail {
     read: u64,
     seen: std::collections::HashSet<String>,
     spent: Spent,
+    /// When it was last asked for.
+    used: Instant,
 }
+
+/// A tail nobody asked for in this long goes, its seen messages with it: its session is no longer shown. Shown
+/// again, it is read whole once more.
+const TAIL_IDLE: Duration = Duration::from_secs(3600);
 
 impl Tail {
     fn new(file: String) -> Self {
-        Tail { file, read: 0, seen: Default::default(), spent: Spent::default() }
+        Tail { file, read: 0, seen: Default::default(), spent: Spent::default(), used: Instant::now() }
     }
 }
 
-// ponytail: one tail per session ever shown, never dropped
 /// The tokens of the session `id` on the machine at `target`: its transcript is found once, then each time only what
 /// was written to it since comes over SSH.
 fn read_remote_spent(target: &str, id: &str) -> Option<Spent> {
     static TAILS: std::sync::Mutex<Option<HashMap<String, Tail>>> = std::sync::Mutex::new(None);
     let key = format!("{target}\n{id}");
-    let known = TAILS.lock().unwrap().get_or_insert_default().get(&key).map(|t| (t.file.clone(), t.read));
+    let known = {
+        let mut tails = TAILS.lock().unwrap();
+        let tails = tails.get_or_insert_default();
+        tails.retain(|_, t| t.used.elapsed() < TAIL_IDLE);
+        tails.get(&key).map(|t| (t.file.clone(), t.read))
+    };
     let (file, read) = match known {
         Some(known) => known,
         None => {
@@ -749,6 +766,7 @@ fn read_remote_spent(target: &str, id: &str) -> Option<Spent> {
     let whole = body.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
     let mut tails = TAILS.lock().unwrap();
     let tail = tails.get_or_insert_default().entry(key).or_insert_with(|| Tail::new(file));
+    tail.used = Instant::now();
     add_spent(&String::from_utf8_lossy(&body[..whole]), &mut tail.seen, &mut tail.spent);
     tail.read += whole as u64;
     Some(tail.spent)

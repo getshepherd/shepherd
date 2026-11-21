@@ -34,8 +34,8 @@ pub fn hyperlink(uri: &str) -> Option<Link> {
     ["https://", "http://", "mailto:"].iter().any(|s| uri.starts_with(s)).then(|| Link::Url(uri.into()))
 }
 
-/// The URL or path (`src/a.rs:12:5`) under char `at`, with its char range in `line`.
-// ponytail: one row; a URL wrapped onto the next row opens cut short.
+/// The URL or path (`src/a.rs:12:5`) under char `at`, with its char range in `line`: a line as the program wrote
+/// it, the rows a soft wrap cut it into joined.
 pub fn link_at(line: &[char], at: usize) -> Option<(Range<usize>, Link)> {
     let stop = |c: char| c.is_whitespace() || "\"'`<>()[]{}|│".contains(c);
     if at >= line.len() || stop(line[at]) {

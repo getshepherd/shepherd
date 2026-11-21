@@ -1247,7 +1247,7 @@ fn image_here(place: &Place, path: &str) -> Result<std::path::PathBuf, String> {
     .map_err(|e| e.to_string())?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut h);
-    // ponytail: copies pile up in the cache as the reader's do; prune by age if they ever matter
+    // with the reader's copies, pruned by age at launch (`settings::prune_file_copies`)
     let dir = crate::settings::cache_dir().join("files").join(format!("{:016x}", h.finish()));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let copy = dir.join(full.file_name().unwrap_or_default());

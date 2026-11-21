@@ -585,6 +585,13 @@ impl gpui::Element for TerminalElement {
                     );
                     paint_custom_glyph(glyph, bounds, prepaint.stroke, window, cx);
                 }
+                for decor in &row.decor {
+                    let left = origin.x + cell_w * decor.col as f32;
+                    let cell = Bounds::from_corners(point(left, y), point(left + cell_w * decor.cells as f32, y + line_h));
+                    for quad in decor_quads(decor, cell) {
+                        window.paint_quad(fill(quad, decor.color));
+                    }
+                }
             }
             for (bounds, image, _) in prepaint.images.drain(..).filter(|i| !i.2) {
                 let _ = window.paint_image(bounds, Default::default(), image, 0, false);
@@ -891,6 +898,7 @@ fn shape_row(
     cell_w: Pixels,
     cursor: Option<(usize, Hsla)>,
     glyphs: &mut Vec<CustomGlyph>,
+    decor: &mut Vec<Decor>,
     window: &Window,
 ) -> Vec<(usize, ShapedLine)> {
     let mut segments: Vec<(usize, ShapedLine)> = Vec::new();
@@ -945,10 +953,16 @@ fn shape_row(
         } else {
             gpui::FontStyle::Normal
         };
-        let underline = cell.underline.then_some(gpui::UnderlineStyle {
+        // gpui's text runs draw a straight or a wavy line only: the others are painted over the row (`paint_decor`)
+        use crate::terminal::emulator::UnderlineStyle as U;
+        let drawn = matches!(cell.underline_style, U::Single | U::Curly);
+        if cell.underline && !drawn {
+            decor.push(Decor { col, cells: if cell.wide { 2 } else { 1 }, color, style: cell.underline_style });
+        }
+        let underline = (cell.underline && drawn).then_some(gpui::UnderlineStyle {
             color: Some(color),
             thickness: px(1.0),
-            wavy: cell.undercurl,
+            wavy: cell.underline_style == U::Curly,
         });
         let strikethrough = cell.strikethrough.then_some(gpui::StrikethroughStyle { color: Some(color), thickness: px(1.0) });
         // a cell's whole grapheme cluster (a flag, a skin tone, a letter and its marks) shapes together, on its column
@@ -1013,6 +1027,39 @@ struct RowLayout {
     lines: Vec<(usize, ShapedLine)>,
     /// The cells drawn by [`sprite`] instead of the font.
     glyphs: Vec<CustomGlyph>,
+    /// The underlines text runs can't draw: double, dotted, dashed.
+    decor: Vec<Decor>,
+}
+
+/// An underline painted as quads under a cell, not by its text run.
+struct Decor {
+    col: usize,
+    cells: usize,
+    color: Hsla,
+    style: crate::terminal::emulator::UnderlineStyle,
+}
+
+/// The quads of a [`Decor`] in `cell` (the cell's whole height): 1 px lines near its bottom, as gpui's own underline
+/// sits; dots and dashes restart at each cell, so a run of them looks even at any width.
+fn decor_quads(decor: &Decor, cell: Bounds<Pixels>) -> Vec<Bounds<Pixels>> {
+    use crate::terminal::emulator::UnderlineStyle as U;
+    let (thick, bottom) = (px(1.0), cell.bottom() - px(2.0));
+    let line = |y: Pixels, from: Pixels, len: Pixels| Bounds::new(point(from, y), size(len, thick));
+    let step = |on: f32, period: f32| {
+        let mut x = f32::from(cell.left());
+        let mut out = Vec::new();
+        while x < f32::from(cell.right()) {
+            out.push(line(bottom, px(x), px(on.min(f32::from(cell.right()) - x))));
+            x += period;
+        }
+        out
+    };
+    match decor.style {
+        U::Double => vec![line(bottom, cell.left(), cell.size.width), line(bottom - px(2.0), cell.left(), cell.size.width)],
+        U::Dotted => step(1.0, 2.0),
+        U::Dashed => step((f32::from(cell.size.width) / decor.cells as f32 * 0.6).max(2.0), f32::from(cell.size.width) / decor.cells as f32),
+        U::Single | U::Curly => vec![line(bottom, cell.left(), cell.size.width)],
+    }
 }
 
 impl RowLayout {
@@ -1047,9 +1094,9 @@ impl RowLayout {
                 _ => {}
             }
         }
-        let mut glyphs = Vec::new();
-        let lines = shape_row(cells, theme, mono, font_size, cell_w, cursor, &mut glyphs, window);
-        Self { cells: cells.clone(), cursor: cursor.map(|(col, _)| col), bg, lines, glyphs }
+        let (mut glyphs, mut decor) = (Vec::new(), Vec::new());
+        let lines = shape_row(cells, theme, mono, font_size, cell_w, cursor, &mut glyphs, &mut decor, window);
+        Self { cells: cells.clone(), cursor: cursor.map(|(col, _)| col), bg, lines, glyphs, decor }
     }
 
     /// The old row that row `ix` is laid out as, if one has its cells. `shift` is the offset from the last row
@@ -1433,7 +1480,7 @@ mod tests {
             emu.feed(text.as_bytes());
             emu.line(0)
         };
-        let laid = |cells: Vec<CellSnapshot>, cursor| Rc::new(RowLayout { cells: Arc::new(cells), cursor, bg: Vec::new(), lines: Vec::new(), glyphs: Vec::new() });
+        let laid = |cells: Vec<CellSnapshot>, cursor| Rc::new(RowLayout { cells: Arc::new(cells), cursor, bg: Vec::new(), lines: Vec::new(), glyphs: Vec::new(), decor: Vec::new() });
         let old: Vec<_> = ["a", "b", "c", "d"].map(|t| laid(row(t), None)).into();
         // scrolled one line back: "z" is new, the rest moved down a row
         let mut shift = 0;
@@ -1470,5 +1517,19 @@ mod tests {
         snap_to_cells(&mut line, &[3, 4, 5, 5], 3, px(10.));
         let xs: Vec<f32> = line.runs[0].glyphs.iter().map(|g| f32::from(g.position.x)).collect();
         assert_eq!(xs, [0., 20., 22.]);
+    }
+
+    #[test]
+    fn underlines_text_runs_cannot_draw_are_quads() {
+        use crate::terminal::emulator::UnderlineStyle as U;
+        let cell = Bounds::new(point(px(0.), px(0.)), size(px(8.), px(16.)));
+        let quads = |style| decor_quads(&Decor { col: 0, cells: 1, color: gpui::red(), style }, cell);
+        let ys = |q: Vec<Bounds<Pixels>>| q.iter().map(|b| f32::from(b.origin.y)).collect::<Vec<_>>();
+        assert_eq!(ys(quads(U::Double)), [14., 12.]);
+        // a dot every other pixel, in the cell
+        let dots = quads(U::Dotted);
+        assert_eq!(dots.len(), 4);
+        assert!(dots.iter().all(|b| b.right() <= cell.right()));
+        assert_eq!(quads(U::Dashed).len(), 1);
     }
 }

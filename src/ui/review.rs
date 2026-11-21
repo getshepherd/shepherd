@@ -802,8 +802,14 @@ pub fn read_review(key: &str) -> Option<Review> {
     let (dir, branch) = key.split_once('\n')?;
     let origin = crate::herdr::git(dir, &["remote", "get-url", "origin"]).ok();
     let Some(host) = origin.and_then(|o| host(&String::from_utf8_lossy(&o.stdout))) else { return Some(Review::NoRemote) };
-    // ponytail: by name; a GitHub Enterprise host without "github" in it goes to glab
-    Some(if host.contains("github") { github(dir, branch, &host) } else { gitlab(dir, branch, &host) })
+    Some(if is_github(&host, dir) { github(dir, branch, &host) } else { gitlab(dir, branch, &host) })
+}
+
+/// Whether `host` is GitHub's: by its name, else by gh being signed in to it, as it is to a GitHub Enterprise host whose
+/// name doesn't say so. Any other host is taken for GitLab's. Callers are cached and off the main thread: gh checks
+/// its token with the host.
+pub fn is_github(host: &str, dir: &str) -> bool {
+    host.contains("github") || cli("gh", &["auth", "status", "--hostname", host], dir).is_ok_and(|o| o.status.success())
 }
 
 fn missing(e: &std::io::Error, tool: &'static str) -> Review {
