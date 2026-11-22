@@ -92,8 +92,8 @@ impl Shell {
                     installs(PageEvent::InstallExtension(id));
                     return false;
                 }
-                if let Some((dir, branch)) = review_link(&to) {
-                    reviewed(PageEvent::Review { dir, branch });
+                if let Some((dir, branch, url)) = review_link(&to) {
+                    reviewed(PageEvent::Review { dir, branch, url });
                     return false;
                 }
                 let stay = !follows_outside(&to);
@@ -103,8 +103,8 @@ impl Shell {
                 stay
             })
             .with_new_window_req_handler(move |to, _| {
-                if let Some((dir, branch)) = review_link(&to) {
-                    reviewed_new(PageEvent::Review { dir, branch });
+                if let Some((dir, branch, url)) = review_link(&to) {
+                    reviewed_new(PageEvent::Review { dir, branch, url });
                     return wry::NewWindowResponse::Deny;
                 }
                 let event = if opens_outside(&to) { PageEvent::Outside(to) } else { PageEvent::NewTab(to, false) };
@@ -228,7 +228,7 @@ impl Shell {
                 }
             }
             PageEvent::Outside(url) => crate::ui::open_outside(&url, cx),
-            PageEvent::Review { dir, branch } => self.pick_review(dir, branch, window, cx),
+            PageEvent::Review { dir, branch, url } => self.pick_review(dir, branch, url, window, cx),
             PageEvent::InstallExtension(id) => {
                 crate::ui::toast::info(cx, "Installing the extension…", None);
                 let task = cx.background_spawn(async move { crate::browser_extensions::install_from_store(&id) });

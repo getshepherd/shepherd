@@ -30,7 +30,7 @@ pub(super) struct ShownReview {
     /// The shown pane's own, for the Diffs and Files tabs, which a picked review doesn't move.
     pub pane_dir: Option<String>,
     pub pane_branch: Option<String>,
-    /// The review cache's key: the directory and the branch, a line apart.
+    /// The review cache's key: the directory, the branch and a picked PR's URL, a line apart.
     pub key: Option<String>,
     pub review: Option<Review>,
 }
@@ -104,11 +104,12 @@ impl Shell {
         if self.review_pick.as_ref().is_some_and(|(p, ..)| *p != pane) {
             self.review_pick = None;
         }
-        let (dir, branch) = match &self.review_pick {
-            Some((_, d, b)) => (Some(d.clone()), Some(b.clone())),
-            None => (pane_dir.clone(), pane_branch.clone()),
+        let (dir, branch, url) = match &self.review_pick {
+            Some((_, d, b, url)) => (Some(d.clone()), Some(b.clone()), url.as_ref()),
+            None => (pane_dir.clone(), pane_branch.clone(), None),
         };
-        let key = dir.clone().zip(branch.clone()).map(|(d, b)| format!("{d}\n{b}"));
+        let picked = url.map(|u| format!("\n{u}")).unwrap_or_default();
+        let key = dir.clone().zip(branch.clone()).map(|(d, b)| format!("{d}\n{b}{picked}"));
         let ttl = if window.is_window_active() { REVIEW_TTL } else { Duration::MAX };
         let review = key.as_deref().and_then(|k| cached(k, ttl, read_review, cx));
         let running = review.as_ref().is_some_and(Review::running);
@@ -122,11 +123,11 @@ impl Shell {
         ShownReview { dir, branch, pane_dir, pane_branch, key, review }
     }
 
-    /// Shows the PR of `branch`, in the checkout at `dir`, in the review panel: what a `shepherd://review` link in a
+    /// Shows the PR at `url`, else of `branch`, in the checkout at `dir`, in the review panel: what a `shepherd://review` link in a
     /// page asks for (the pull-requests extension's rows), until another pane is shown. A sidebar page stays, with
     /// the panel beside it.
-    pub(super) fn pick_review(&mut self, dir: String, branch: String, window: &Window, cx: &mut Context<Self>) {
-        self.review_pick = Some((self.active_pane(window, cx), dir, branch));
+    pub(super) fn pick_review(&mut self, dir: String, branch: String, url: Option<String>, window: &Window, cx: &mut Context<Self>) {
+        self.review_pick = Some((self.active_pane(window, cx), dir, branch, url));
         self.review_tab = Tab::Summary;
         self.update_panel(cx, |p| p.add(crate::right_panel::Surface::PullRequest));
         cx.notify();

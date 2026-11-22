@@ -70,7 +70,7 @@ pub(super) enum PageEvent {
     /// A link to another site, for the system browser.
     Outside(String),
     /// A `shepherd://review` link: the PR of a branch, by a checkout of its repository, for the review panel.
-    Review { dir: String, branch: String },
+    Review { dir: String, branch: String, url: Option<String> },
     /// A Web Store page's Add to Shepherd: the extension's id, to install.
     InstallExtension(String),
     /// One of Shepherd's shortcuts, pressed in the page.
@@ -1339,21 +1339,24 @@ fn safari_agent() -> &'static str {
 #[cfg(target_os = "macos")]
 mod host;
 
-/// `shepherd://review?dir=<checkout>&branch=<branch>`, as a page's form or `URLSearchParams` writes it: the checkout
-/// and the branch whose PR the review panel shows. Any other link is `None`.
-fn review_link(url: &str) -> Option<(String, String)> {
+/// `shepherd://review?dir=<checkout>&branch=<branch>[&url=<PR>]`, as a page's form or `URLSearchParams` writes it: the
+/// checkout, the branch and the PR the review panel shows, the branch's without `url`. Any other link is `None`.
+fn review_link(url: &str) -> Option<(String, String, Option<String>)> {
     let query = url.strip_prefix("shepherd://review?")?;
     let mut found = (None, None);
+    let mut request = None;
     for pair in query.split('&') {
         let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
         let value = percent_encoding::percent_decode_str(&value.replace('+', " ")).decode_utf8().ok()?.into_owned();
         match name {
             "dir" => found.0 = Some(value),
             "branch" => found.1 = Some(value),
+            "url" => request = Some(value).filter(|v| !v.is_empty()),
             _ => {}
         }
     }
-    found.0.zip(found.1).filter(|(d, b)| !d.is_empty() && !b.is_empty())
+    let (dir, branch) = found.0.zip(found.1).filter(|(d, b)| !d.is_empty() && !b.is_empty())?;
+    Some((dir, branch, request))
 }
 
 #[cfg(test)]
@@ -1363,7 +1366,8 @@ mod tests {
     #[test]
     fn reads_review_links() {
         let link = "shepherd://review?dir=%2FUsers%2Fme%2Fmy+repo&branch=feat%2Fx&url=https%3A%2F%2Fgithub.com%2Fa%2Fb%2Fpull%2F1";
-        assert_eq!(review_link(link), Some(("/Users/me/my repo".into(), "feat/x".into())));
+        assert_eq!(review_link(link), Some(("/Users/me/my repo".into(), "feat/x".into(), Some("https://github.com/a/b/pull/1".into()))));
+        assert_eq!(review_link("shepherd://review?dir=%2Fa&branch=x"), Some(("/a".into(), "x".into(), None)));
         assert_eq!(review_link("shepherd://review?dir=%2Fa"), None);
         assert_eq!(review_link("https://github.com/a/b/pull/1"), None);
     }

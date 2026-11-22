@@ -287,12 +287,18 @@ fn read_pr(key: &str) -> Option<Pr> {
         let stderr = out.as_ref().map(|o| String::from_utf8_lossy(&o.stderr).into_owned()).unwrap_or_default();
         (out.and_then(|o| parse_pr(&String::from_utf8_lossy(&o.stdout))), stderr)
     };
-    let (pr, stderr) = ask("gh", &["pr", "view", branch, "--json", "number,url,state,isDraft"]);
+    let named = crate::ui::review::checked_out(dir, branch);
+    let view = |selector: &str| ask("gh", &["pr", "view", selector, "--json", "number,url,state,isDraft"]);
+    let (pr, stderr) = match view(named.as_deref().unwrap_or(branch)) {
+        (None, err) if named.is_some() && err.contains("no pull requests found") => view(branch),
+        found => found,
+    };
     // gh found the repo on GitHub and the branch has no PR: no need to ask GitLab
     if pr.is_some() || stderr.contains("no pull requests found") {
         return pr;
     }
-    ask("glab", &["mr", "view", branch, "-F", "json"]).0
+    let iid = named.as_deref().filter(|n| n.bytes().all(|b| b.is_ascii_digit()));
+    ask("glab", &["mr", "view", iid.unwrap_or(branch), "-F", "json"]).0
 }
 
 /// The cached PR or MR of the branch checked out at `dir`, asked again after its TTL while `active` (the window is

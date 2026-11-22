@@ -797,12 +797,65 @@ fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-/// The review of a branch; `key` is its repo's directory and the branch, a line apart.
+/// The review of a branch, or of the PR picked; `key` is the repo's directory, the branch and the picked PR's URL if
+/// there is one, a line apart. A picked PR is read by its number: forks' PRs share branch names (`main`), and gh
+/// doesn't find a fork's by the bare name at all.
 pub fn read_review(key: &str) -> Option<Review> {
-    let (dir, branch) = key.split_once('\n')?;
+    let mut parts = key.splitn(3, '\n');
+    let (dir, branch, picked) = (parts.next()?, parts.next()?, parts.next());
     let origin = crate::herdr::git(dir, &["remote", "get-url", "origin"]).ok();
     let Some(host) = origin.and_then(|o| host(&String::from_utf8_lossy(&o.stdout))) else { return Some(Review::NoRemote) };
-    Some(if is_github(&host, dir) { github(dir, branch, &host) } else { gitlab(dir, branch, &host) })
+    let github_host = is_github(&host, dir);
+    let number = picked.and_then(request_number).map(String::from).or_else(|| checked_out(dir, branch));
+    let review = if github_host { github(dir, branch, number.as_deref(), &host) } else { gitlab(dir, branch, number.as_deref(), &host) };
+    Some(match picked {
+        Some(url) => only_picked(review, url),
+        None => review,
+    })
+}
+
+/// The number in a PR's or MR's URL.
+fn request_number(url: &str) -> Option<&str> {
+    let (_, n) = url.split_once("/pull/").or_else(|| url.split_once("/merge_requests/"))?;
+    (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then_some(n)
+}
+
+/// `review` when it is of the PR at `url`, else why not: approve and merge go by the number in the checkout's
+/// repository, so the same number in another one must not pass for the PR picked.
+fn only_picked(review: Review, url: &str) -> Review {
+    match &review {
+        Review::Found { request, .. } if !request.as_ref().is_some_and(|r| r.pr.url.eq_ignore_ascii_case(url)) => {
+            Review::Failed(format!("{url} isn't in the repository gh or glab takes this checkout for."))
+        }
+        _ => review,
+    }
+}
+
+/// What names the PR a branch was checked out from with `gh pr checkout` or `glab mr checkout`, which the branch's
+/// name alone doesn't when the PR is a fork's: its number, or gh's `owner:branch`.
+pub(crate) fn checked_out(dir: &str, branch: &str) -> Option<String> {
+    let git = |args: &[&str]| {
+        let out = crate::herdr::git(dir, args).ok().filter(|o| o.status.success())?;
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
+    };
+    let merge = git(&["config", "--get", &format!("branch.{branch}.merge")])?;
+    let remote = git(&["config", "--get", &format!("branch.{branch}.remote")]).filter(|r| r != "origin");
+    let url = remote.and_then(|r| if r.contains(':') { Some(r) } else { git(&["remote", "get-url", &r]) });
+    tracked_request(branch, &merge, url.as_deref())
+}
+
+/// [`checked_out`] from what the branch tracks: the ref, and its remote's URL unless that is origin. gh names the
+/// local branch as the fork's, or `owner/branch` where that is the default branch's name; any other branch that
+/// tracks another remote (one cut from upstream's main) is no PR's.
+fn tracked_request(branch: &str, merge: &str, url: Option<&str>) -> Option<String> {
+    if let Some(pull) = merge.strip_prefix("refs/pull/").or_else(|| merge.strip_prefix("refs/merge-requests/")) {
+        let n = pull.split('/').next()?;
+        return n.bytes().all(|b| b.is_ascii_digit()).then(|| n.to_string());
+    }
+    let head = merge.strip_prefix("refs/heads/")?;
+    let repo = repo_path(url?)?;
+    let owner = repo.split('/').next()?;
+    (branch == head || branch == format!("{owner}/{head}")).then(|| format!("{owner}:{head}"))
 }
 
 /// Whether `host` is GitHub's: by its name, else by gh being signed in to it, as it is to a GitHub Enterprise host whose
@@ -819,8 +872,14 @@ fn missing(e: &std::io::Error, tool: &'static str) -> Review {
 /// What `gh pr view` is asked for.
 const GITHUB_FIELDS: &str = "number,title,state,isDraft,url,author,body,statusCheckRollup,baseRefName,mergeable,latestReviews,reviewDecision,reviewRequests,autoMergeRequest,headRefName,updatedAt,labels,additions,deletions,changedFiles";
 
-fn github(dir: &str, branch: &str, host: &str) -> Review {
-    let (out, err) = match run("gh", &["pr", "view", branch, "--json", GITHUB_FIELDS], dir) {
+/// `named` is what names the PR better than `branch`; an `owner:branch` with no PR leaves it to the branch.
+fn github(dir: &str, branch: &str, named: Option<&str>, host: &str) -> Review {
+    let view = |selector: &str| run("gh", &["pr", "view", selector, "--json", GITHUB_FIELDS], dir);
+    let (out, err) = match view(named.unwrap_or(branch)) {
+        Ok((_, err)) if named.is_some() && err.contains("no pull requests found") => match view(branch) {
+            Ok(o) => o,
+            Err(e) => return missing(&e, "gh"),
+        },
         Ok(o) => o,
         Err(e) => return missing(&e, "gh"),
     };
@@ -831,20 +890,25 @@ fn github(dir: &str, branch: &str, host: &str) -> Review {
     }
 }
 
-fn gitlab(dir: &str, branch: &str, host: &str) -> Review {
-    gitlab_graphql(dir, branch).unwrap_or_else(|| gitlab_rest(dir, branch, host))
+fn gitlab(dir: &str, branch: &str, named: Option<&str>, host: &str) -> Review {
+    // only an iid: glab knows no `owner:branch`, and finds a fork's MR by its branch
+    let iid = named.filter(|n| n.bytes().all(|b| b.is_ascii_digit()));
+    gitlab_graphql(dir, branch, iid).unwrap_or_else(|| gitlab_rest(dir, branch, iid, host))
 }
 
 /// The branch's review from [`GITLAB_QUERY`]; `None` when it can't be had (no origin, no login, an older GitLab), for
 /// the REST calls to try and say why.
-fn gitlab_graphql(dir: &str, branch: &str) -> Option<Review> {
+fn gitlab_graphql(dir: &str, branch: &str, iid: Option<&str>) -> Option<Review> {
     let (host, path) = origin_of(dir)?;
     let base = format!("https://{host}");
     let ask = |query: &str, var: String| {
         let out = run("glab", &["api", "graphql", "--hostname", &host, "-f", &format!("query={query}"), "-f", &format!("path={path}"), "-f", &var], dir).ok()?.0;
         Some(out)
     };
-    let out = ask(GITLAB_QUERY, format!("branch={branch}"))?;
+    let out = match iid {
+        Some(iid) => ask(&GITLAB_QUERY.replace("sourceBranches: [$branch]", "iids: [$branch]"), format!("branch={iid}")),
+        None => ask(GITLAB_QUERY, format!("branch={branch}")),
+    }?;
     let (request, pipeline, checks, iid) = parse_gitlab_review(&out, &base, &path, now())?;
     let checks = match iid {
         Some(iid) => ask(GITLAB_JOBS, format!("iid={iid}")).and_then(|out| parse_gitlab_jobs(&out, &base, &path, now())).unwrap_or_default(),
@@ -854,8 +918,8 @@ fn gitlab_graphql(dir: &str, branch: &str) -> Option<Review> {
 }
 
 /// The branch's review from glab's REST calls, one by one.
-fn gitlab_rest(dir: &str, branch: &str, host: &str) -> Review {
-    let (out, err) = match run("glab", &["mr", "view", branch, "-F", "json"], dir) {
+fn gitlab_rest(dir: &str, branch: &str, iid: Option<&str>, host: &str) -> Review {
+    let (out, err) = match run("glab", &["mr", "view", iid.unwrap_or(branch), "-F", "json"], dir) {
         Ok(o) => o,
         Err(e) => return missing(&e, "glab"),
     };
@@ -1669,6 +1733,22 @@ fn strip_tags(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pr_is_named_by_its_link_or_by_what_its_checkout_tracks() {
+        assert_eq!(request_number("https://github.com/a/app/pull/35"), Some("35"));
+        assert_eq!(request_number("https://host/g/app/-/merge_requests/7"), Some("7"));
+        assert_eq!(request_number("https://github.com/a/app/pull/--web"), None);
+
+        let fork = Some("git@github.com:ann/app.git");
+        assert_eq!(tracked_request("fix", "refs/pull/36/head", None).as_deref(), Some("36"));
+        assert_eq!(tracked_request("fix", "refs/merge-requests/7/head", None).as_deref(), Some("7"));
+        assert_eq!(tracked_request("fix", "refs/heads/fix", fork).as_deref(), Some("ann:fix"));
+        assert_eq!(tracked_request("ann/main", "refs/heads/main", fork).as_deref(), Some("ann:main"));
+        // a branch of origin's, and one cut from another remote's main
+        assert_eq!(tracked_request("fix", "refs/heads/fix", None), None);
+        assert_eq!(tracked_request("fix", "refs/heads/main", fork), None);
+    }
 
     #[test]
     fn origin_hosts() {

@@ -163,9 +163,9 @@ pub struct Shell {
     review_poll: Option<String>,
     /// The shown branch's key at the last render and whether its checks ran: when they stop, CI finished.
     review_last: Option<(String, bool)>,
-    /// The review a `shepherd://review` link picked (the pane shown then, the checkout, the branch), shown in place of
+    /// The review a `shepherd://review` link picked (the pane shown then, the checkout, the branch, the PR's URL), shown in place of
     /// the pane's own while that pane is.
-    review_pick: Option<(Option<String>, String, String)>,
+    review_pick: Option<(Option<String>, String, String, Option<String>)>,
     /// The CLI calls the review panel's buttons started and that have not finished, by `Check::command`.
     review_acting: std::collections::HashSet<String>,
     /// The pipeline (or workflow) the review panel pages to, picked for a branch's review (its key); else it opens
