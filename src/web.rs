@@ -244,6 +244,18 @@ impl Seen {
         std::fs::write(self.path(key, "json"), serde_json::to_string(&record)?)?;
         std::fs::write(self.path(key, "icon"), bytes)
     }
+
+    /// The icon kept for page `key`, else the one the page at `url` has now, kept from then on: the cache folder can be
+    /// cleaned under a running Shepherd, and nothing else keeps the icon of a page outside the sidebar. Blocking, as
+    /// [`fetch_favicon`].
+    pub fn icon_or_fetch(&self, key: &str, url: &str) -> Option<(ImageFormat, Vec<u8>)> {
+        self.icon(key, url).or_else(|| {
+            let (format, bytes) = fetch_favicon(url)?;
+            // shown all the same when it can't be kept
+            let _ = self.keep_icon(key, url, &bytes);
+            Some((format, bytes))
+        })
+    }
 }
 
 /// The [`Seen`] key a site's icon is kept under (`https://github.com` → `site-https___github_com`): a browser tab's
@@ -552,6 +564,31 @@ mod tests {
         let (format, bytes) = fetch_favicon(&format!("http://127.0.0.1:{port}/board")).unwrap();
         assert_eq!(format, gpui::ImageFormat::Png);
         assert!(bytes.starts_with(b"\x89PNG"));
+    }
+
+    #[test]
+    fn an_icon_the_cache_lost_is_fetched_and_kept() {
+        use std::io::{Read, Write};
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://127.0.0.1:{}/", server.local_addr().unwrap().port());
+        let serving = std::thread::spawn(move || {
+            for stream in server.incoming().take(2) {
+                let mut stream = stream.unwrap();
+                let _ = stream.read(&mut [0; 1024]);
+                let body = r#"<svg xmlns="http://www.w3.org/2000/svg"/>"#;
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            }
+        });
+        // a folder that isn't there, as after a cleaner
+        let dir = std::env::temp_dir().join(format!("shepherd-icon-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let seen = Seen { dir: dir.clone() };
+        let fetched = seen.icon_or_fetch("ext:tasks", &url);
+        assert_eq!(fetched.as_ref().map(|(format, _)| *format), Some(gpui::ImageFormat::Svg));
+        serving.join().unwrap();
+        // kept: shown with the server gone
+        assert_eq!(seen.icon_or_fetch("ext:tasks", &url), fetched);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

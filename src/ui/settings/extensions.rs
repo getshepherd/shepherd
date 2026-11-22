@@ -210,14 +210,23 @@ impl SettingsView {
         );
     }
 
-    /// Reads each extension's page icon the sidebar kept (`crate::web::Seen`), once a Settings: a small file each.
-    pub(super) fn load_ext_icons(&mut self, cx: &App) {
-        let seen = crate::web::Seen::default();
+    /// Asks for each extension's icon off the main thread: the one kept, else its page's (`Seen::icon_or_fetch`).
+    pub(super) fn load_ext_icons(&mut self, cx: &mut Context<Self>) {
         for e in cx.try_global::<Extensions>().map(|e| e.0.clone()).unwrap_or_default() {
-            self.ext_icons.entry(e.name.clone()).or_insert_with(|| {
-                let entry = e.entry();
-                seen.icon(&entry.id, &entry.url).map(|(format, bytes)| std::sync::Arc::new(gpui::Image::from_bytes(format, bytes)))
-            });
+            if self.ext_icons.get(&e.name).is_some_and(|(answered, icon)| icon.is_some() || *answered || !e.alive) {
+                continue;
+            }
+            self.ext_icons.insert(e.name.clone(), (e.alive, None));
+            let entry = e.entry();
+            let icon = cx.background_spawn(async move { crate::web::Seen::default().icon_or_fetch(&entry.id, &entry.url) });
+            cx.spawn(async move |this, cx| {
+                let Some((format, bytes)) = icon.await else { return };
+                let _ = this.update(cx, |v, cx| {
+                    v.ext_icons.insert(e.name, (true, Some(std::sync::Arc::new(gpui::Image::from_bytes(format, bytes)))));
+                    cx.notify();
+                });
+            })
+            .detach();
         }
     }
 
@@ -241,10 +250,10 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Its icon: the page's favicon as the sidebar kept it, else its initial on a tile.
+    /// Its icon: its page's favicon, else its initial on a tile.
     fn ext_icon(&self, e: &Extension, theme: &Theme) -> Div {
         let tile = div().flex_none().size(px(40.)).rounded(px(10.)).flex().items_center().justify_center();
-        match self.ext_icons.get(&e.name).cloned().flatten() {
+        match self.ext_icons.get(&e.name).and_then(|(_, icon)| icon.clone()) {
             Some(image) => tile.child(gpui::img(image).size(px(40.)).rounded(px(10.))),
             None => tile
                 .bg(theme.accent.opacity(0.85))

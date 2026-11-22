@@ -200,8 +200,9 @@ pub struct SettingsView {
     install_dialog: Option<crate::ui::Popup<()>>,
     /// The settings dialog of an extension, by name (when it runs, its folder), up or playing its exit.
     ext_settings: Option<crate::ui::Popup<String>>,
-    /// Each extension's page icon as the sidebar last kept it, by name: read once a Settings.
-    ext_icons: std::collections::HashMap<String, Option<std::sync::Arc<gpui::Image>>>,
+    /// Each extension's page icon, by name, with whether its server answered when it was asked for: one without an
+    /// icon is asked again once its server does.
+    ext_icons: std::collections::HashMap<String, (bool, Option<std::sync::Arc<gpui::Image>>)>,
     /// The web pages' name and URL fields, in the settings' order; made as entries come, dropped as they go.
     web_fields: Vec<WebFields>,
     /// The places a web page can be listed in, as (key, name), once herdr has listed them.
