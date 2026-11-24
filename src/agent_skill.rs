@@ -34,6 +34,17 @@ fn detect(var: impl Fn(&str) -> Option<String>) -> Option<&'static str> {
     }
 }
 
+/// Why this agent is not one the skill is for, if it isn't: Claude Code run by another app (`claude -p` from an SDK,
+/// say) has no pane the user watches, though it inherits the pane's variables from wherever the app was started, so
+/// it would move its work into the backend behind the user's back. Interactive Claude Code says `cli`.
+// ponytail: Claude Code alone says how it was started; a Codex run by an app (`codex exec`) still gets the guide
+fn not_in_a_terminal(var: impl Fn(&str) -> Option<String>) -> Option<&'static str> {
+    var("CLAUDE_CODE_ENTRYPOINT").filter(|e| e != "cli").map(|_| {
+        "This agent was started by another app, not in a terminal the user sees in Shepherd: this skill isn't for it. Don't use it \
+         or the backend's CLI; do the work with your own tools, as your app says."
+    })
+}
+
 /// The guide for `backend`, or for none known, with what to do then.
 fn guide(backend: Option<&str>) -> Result<String, String> {
     let Some(name) = backend else {
@@ -64,6 +75,10 @@ fn extensions_section(skills: &[(String, String)]) -> String {
 /// extensions that have skills; or an extension's skill.
 // ponytail: a release build on Windows has no console, so this prints nothing there, as `hooks` does
 pub fn cli(args: &[String]) -> i32 {
+    if let Some(why) = not_in_a_terminal(|name| std::env::var(name).ok()) {
+        println!("{why}");
+        return 0;
+    }
     let skills = crate::extensions::skills(&crate::extensions::root());
     let named = args.first().map(String::as_str);
     if let Some((_, skill)) = named.filter(|n| !BACKENDS.iter().any(|(b, _)| b == n)).and_then(|n| skills.iter().find(|(name, _)| name == n)) {
@@ -104,8 +119,9 @@ fn stub(exe: &Path, extensions: &[(String, String)]) -> String {
         )
     };
     format!(
-        "---\nname: shepherd\ndescription: Subagents as interactive `claude` or `codex` in their own terminals of the multiplexer Shepherd runs on \
-         (herdr, Rex, hc or tmux), where the user sees each one and can take it over. Use whenever work goes to another agent: a new agent the \
+        "---\nname: shepherd\ndescription: For an interactive agent in a terminal of the multiplexer Shepherd runs on (herdr, Rex, hc or tmux), \
+         not one another app runs (`claude -p`, an SDK). Subagents as interactive `claude` or `codex` in their own terminals there, where the \
+         user sees each one and can take it over. Use whenever work goes to another agent: a new agent the \
          user asks for, a subagent, a review, research, a parallel subtask, a handoff to its own branch, or a skill that asks for subagents. \
          Also drives Shepherd's own browser (the tabs in a workspace's right panel and the pages in its sidebar) from a pane: open and close tabs, \
          read a page and click, fill, press keys and wait in it, run JavaScript, read the console and requests, set the viewport, take \
@@ -224,6 +240,15 @@ mod tests {
         assert_eq!(extensions_section(&[]), "");
         let section = extensions_section(&[("prs".into(), "---\nname: prs\ndescription: Every PR of a task.\n---\n# prs".into())]);
         assert!(section.starts_with("\n# Extensions\n") && section.ends_with("- `prs`: Every PR of a task.\n"), "{section}");
+    }
+
+    #[test]
+    fn an_agent_another_app_runs_is_turned_away() {
+        let entry = |e: Option<&'static str>| move |name: &str| (name == "CLAUDE_CODE_ENTRYPOINT").then_some(e).flatten().map(String::from);
+        assert!(not_in_a_terminal(entry(Some("commutator"))).is_some());
+        assert!(not_in_a_terminal(entry(Some("sdk-ts"))).is_some());
+        assert_eq!(not_in_a_terminal(entry(Some("cli"))), None);
+        assert_eq!(not_in_a_terminal(entry(None)), None, "Codex says nothing");
     }
 
     #[test]
