@@ -34,25 +34,32 @@ fn detect(var: impl Fn(&str) -> Option<String>) -> Option<&'static str> {
     }
 }
 
-/// Why this agent is not one the skill is for, if it isn't: Claude Code run by another app (`claude -p` from an SDK,
-/// say) has no pane the user watches, though it inherits the pane's variables from wherever the app was started, so
-/// it would move its work into the backend behind the user's back. Interactive Claude Code says `cli`.
-// ponytail: Claude Code alone says how it was started; a Codex run by an app (`codex exec`) still gets the guide
-fn not_in_a_terminal(var: impl Fn(&str) -> Option<String>) -> Option<&'static str> {
-    var("CLAUDE_CODE_ENTRYPOINT").filter(|e| e != "cli").map(|_| {
-        "This agent was started by another app, not in a terminal the user sees in Shepherd: this skill isn't for it. Don't use it \
-         or the backend's CLI; do the work with your own tools, as your app says."
-    })
+/// Shepherd's app id, which macOS hands down to every process the app starts: the backend server Shepherd started,
+/// and so each shell and agent in its panes.
+const APP_ID: &str = "dev.freethinkel.shepherd";
+
+/// Why this agent is not one the skill is for, if it isn't: the skill is for an agent in a terminal Shepherd shows.
+/// - Claude Code another app runs (`claude -p` from an SDK) says so in its entrypoint, interactive Claude Code says
+///   `cli`. Such an app inherits a pane's variables when started from one, so the backend's alone don't tell.
+/// - No backend: a terminal outside them all (Ghostty, an editor's).
+/// - On macOS, herdr or tmux whose server another app started: the herdr TUI in Ghostty, a tmux of the user's own.
+///   Rex and hc terminals belong to their own apps, so there the app says nothing.
+// ponytail: a herdr server the TUI started that Shepherd attached to later counts as outside; a Codex another app runs
+// (`codex exec`) says nothing of it and still gets the guide
+fn not_for_this_agent(var: impl Fn(&str) -> Option<String>, backend: Option<&str>) -> Option<&'static str> {
+    let outside = var("CLAUDE_CODE_ENTRYPOINT").is_some_and(|e| e != "cli")
+        || backend.is_none()
+        || (cfg!(target_os = "macos")
+            && matches!(backend, Some("herdr" | "tmux"))
+            && var("__CFBundleIdentifier").is_some_and(|id| id != APP_ID));
+    outside.then_some(
+        "This agent doesn't run in a terminal of Shepherd, so the shepherd skill isn't for it. Don't use it or a terminal \
+         multiplexer's CLI for subagents; do the work with your own tools.",
+    )
 }
 
-/// The guide for `backend`, or for none known, with what to do then.
-fn guide(backend: Option<&str>) -> Result<String, String> {
-    let Some(name) = backend else {
-        return Ok(format!(
-            "{GUIDE}\n# This terminal's backend\n\nNone of HC_TERMINAL_ID, HERDR_ENV=1, TMUX or REX_BLOCK is set, so the backend is unknown. Say so and \
-             ask the user which one it is, then run this command again with its name after `skill`: herdr, rex, hc or tmux.\n"
-        ));
-    };
+/// The guide for `backend`.
+fn guide(name: &str) -> Result<String, String> {
     let (_, text) = BACKENDS.iter().find(|(n, _)| *n == name).ok_or_else(|| format!("no backend {name}: herdr, rex, hc or tmux"))?;
     // herdr makes worktrees itself, the others leave them to git
     Ok(if name == "herdr" { format!("{GUIDE}\n{text}") } else { format!("{GUIDE}\n{text}\n{WORKTREES}") })
@@ -75,12 +82,15 @@ fn extensions_section(skills: &[(String, String)]) -> String {
 /// extensions that have skills; or an extension's skill.
 // ponytail: a release build on Windows has no console, so this prints nothing there, as `hooks` does
 pub fn cli(args: &[String]) -> i32 {
-    if let Some(why) = not_in_a_terminal(|name| std::env::var(name).ok()) {
+    let named = args.first().map(String::as_str);
+    let var = |name: &str| std::env::var(name).ok();
+    // a backend named here is the user's word for it, from a terminal the variables don't tell
+    let backend = named.filter(|n| BACKENDS.iter().any(|(b, _)| b == n)).or_else(|| detect(var));
+    if let Some(why) = not_for_this_agent(var, backend) {
         println!("{why}");
         return 0;
     }
     let skills = crate::extensions::skills(&crate::extensions::root());
-    let named = args.first().map(String::as_str);
     if let Some((_, skill)) = named.filter(|n| !BACKENDS.iter().any(|(b, _)| b == n)).and_then(|n| skills.iter().find(|(name, _)| name == n)) {
         // an extension's binary lives in its own folder, not on PATH, so `tasks …` as its skill writes it would not run
         let binary = crate::extensions::scan(&crate::extensions::root()).into_iter().find(|e| Some(e.name.as_str()) == named).map(|e| e.binary);
@@ -91,7 +101,7 @@ pub fn cli(args: &[String]) -> i32 {
         println!("{skill}");
         return 0;
     }
-    let backend = named.or_else(|| detect(|name| std::env::var(name).ok()));
+    let Some(backend) = named.or(backend) else { return 0 };
     match guide(backend) {
         Ok(text) => {
             print!("{text}{}", extensions_section(&skills));
@@ -139,7 +149,7 @@ const HEAD: &str = "<!-- Written by Shepherd (Settings → Backend → Agent ski
 
 /// The SKILL.md a herdr machine gets: no Shepherd binary there to run, so the herdr guide itself.
 fn remote_skill() -> String {
-    let guide = guide(Some("herdr")).expect("herdr has a guide");
+    let guide = guide("herdr").expect("herdr has a guide");
     format!(
         "---\nname: shepherd\ndescription: Subagents as interactive `claude` or `codex` in their own herdr panes, where the user sees each one \
          and can take it over. Use whenever work goes to another agent: a new agent the user asks for, a subagent, a review, research, a parallel \
@@ -243,12 +253,16 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_another_app_runs_is_turned_away() {
-        let entry = |e: Option<&'static str>| move |name: &str| (name == "CLAUDE_CODE_ENTRYPOINT").then_some(e).flatten().map(String::from);
-        assert!(not_in_a_terminal(entry(Some("commutator"))).is_some());
-        assert!(not_in_a_terminal(entry(Some("sdk-ts"))).is_some());
-        assert_eq!(not_in_a_terminal(entry(Some("cli"))), None);
-        assert_eq!(not_in_a_terminal(entry(None)), None, "Codex says nothing");
+    fn only_an_agent_in_a_terminal_of_shepherd_gets_the_guide() {
+        let env = |set: &'static [(&str, &str)]| move |name: &str| set.iter().find(|(n, _)| *n == name).map(|(_, v)| v.to_string());
+        let ours = env(&[("CLAUDE_CODE_ENTRYPOINT", "cli"), ("__CFBundleIdentifier", APP_ID)]);
+        assert_eq!(not_for_this_agent(ours, Some("herdr")), None);
+        assert_eq!(not_for_this_agent(env(&[]), Some("herdr")), None, "Codex, or Linux: no entrypoint, no app");
+        assert!(not_for_this_agent(env(&[("CLAUDE_CODE_ENTRYPOINT", "commutator"), ("__CFBundleIdentifier", APP_ID)]), Some("herdr")).is_some());
+        assert!(not_for_this_agent(env(&[("CLAUDE_CODE_ENTRYPOINT", "cli")]), None).is_some(), "Ghostty, no backend");
+        let ghostty = env(&[("__CFBundleIdentifier", "com.mitchellh.ghostty")]);
+        assert_eq!(not_for_this_agent(ghostty, Some("tmux")).is_some(), cfg!(target_os = "macos"), "a tmux of the user's own");
+        assert_eq!(not_for_this_agent(env(&[("__CFBundleIdentifier", "com.rex.app")]), Some("rex")), None, "Rex's terminals are Rex's");
     }
 
     #[test]
@@ -264,13 +278,12 @@ mod tests {
     #[test]
     fn every_backend_has_its_guide() {
         for (name, text) in BACKENDS {
-            let out = guide(Some(name)).unwrap();
+            let out = guide(name).unwrap();
             assert!(out.starts_with(GUIDE) && out.contains(text));
             assert_eq!(out.contains(WORKTREES), name != "herdr", "{name}");
             assert!(!out.contains(".md)"), "{name}: a link to a file the agent doesn't have");
         }
-        assert!(guide(Some("zellij")).is_err());
-        assert!(guide(None).unwrap().contains("ask the user"));
+        assert!(guide("zellij").is_err());
     }
 
     #[cfg(unix)]
