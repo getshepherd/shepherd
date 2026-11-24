@@ -16,6 +16,8 @@ fn main() {
     if args.first().is_some_and(|a| a == "skill") {
         std::process::exit(shepherd::agent_skill::cli(&args[1..]));
     }
+    // before any thread: the backend servers Shepherd starts, and so their terminals, get its agent skill's plugin
+    shepherd::agent_skill::export_plugin_dir();
     shepherd::logs::init();
     let rt = tokio::runtime::Runtime::new().expect("tokio");
     let handle = rt.handle().clone();

@@ -181,9 +181,33 @@ pub fn sync_machine(target: String) {
     });
 }
 
-/// Claude Code's skills, and `~/.agents/skills`, which Codex and Pi read.
-fn dirs(home: &Path) -> [PathBuf; 2] {
-    [home.join(".claude/skills/shepherd"), home.join(".agents/skills/shepherd")]
+/// The Claude Code plugin that holds the skill for Claude Code. Not `~/.claude/skills`, which every Claude Code reads:
+/// Claude Code loads a plugin named in `CLAUDE_CODE_PLUGIN_DIRS`, which Shepherd sets for the servers it starts
+/// ([`export_plugin_dir`]), so only an agent in one of their terminals has the skill.
+fn plugin_dir() -> PathBuf {
+    crate::settings::config_dir().join("agent-plugin")
+}
+
+/// Adds [`plugin_dir`] to this process's `CLAUDE_CODE_PLUGIN_DIRS`, for the backend servers it starts, and their
+/// terminals, to inherit. Whether the skill is on or not: Claude Code passes over a folder that isn't there.
+// ponytail: a server Shepherd didn't start (the herdr TUI's, one from before this) lacks it until restarted from here
+pub fn export_plugin_dir() {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("CLAUDE_CODE_PLUGIN_DIRS").map(|v| std::env::split_paths(&v).collect()).unwrap_or_default();
+    let ours = plugin_dir();
+    if dirs.contains(&ours) {
+        return;
+    }
+    dirs.push(ours);
+    if let Ok(joined) = std::env::join_paths(dirs) {
+        // SAFETY: called first thing in `main`, before any other thread is started
+        unsafe { std::env::set_var("CLAUDE_CODE_PLUGIN_DIRS", joined) };
+    }
+}
+
+/// The skill in Shepherd's plugin, for Claude Code, and in `~/.agents/skills`, which Codex and Pi read.
+// ponytail: Codex has no folder of its own per process, so every Codex has it; `shepherd skill` turns away one outside
+fn dirs(home: &Path, plugin: &Path) -> [PathBuf; 2] {
+    [plugin.join("skills/shepherd"), home.join(".agents/skills/shepherd")]
 }
 
 fn ours(dir: &Path) -> bool {
@@ -192,13 +216,13 @@ fn ours(dir: &Path) -> bool {
 
 /// Whether Shepherd's skill is in any of the folders.
 pub fn installed() -> bool {
-    dirs(&crate::settings::home()).iter().any(|d| ours(d))
+    dirs(&crate::settings::home(), &plugin_dir()).iter().any(|d| ours(d))
 }
 
 /// Writes the skill into each folder, pointing at this binary, or takes it out, and so on the herdr machine shown. A
 /// `shepherd` skill the user made is left as it is.
 pub fn set(on: bool) -> io::Result<()> {
-    set_in(&crate::settings::home(), on.then(std::env::current_exe).transpose()?.as_deref())?;
+    set_in(&crate::settings::home(), &plugin_dir(), on.then(std::env::current_exe).transpose()?.as_deref())?;
     if let Some(target) = crate::herdr::shown_machine() {
         sync_machine(target);
     }
@@ -206,11 +230,20 @@ pub fn set(on: bool) -> io::Result<()> {
 }
 
 /// `exe`: the binary to point at, `None` to take the skill out.
-fn set_in(home: &Path, exe: Option<&Path>) -> io::Result<()> {
+fn set_in(home: &Path, plugin: &Path, exe: Option<&Path>) -> io::Result<()> {
     // ponytail: every extension by its own description, those without a skill too; ask each for its skill (a process
     // each) if one without turns up
     let extensions: Vec<(String, String)> = crate::extensions::scan(&crate::extensions::root()).into_iter().map(|e| (e.name, e.description)).collect();
-    for dir in dirs(home) {
+    // where an older Shepherd put it for Claude Code, which every Claude Code read
+    let legacy = home.join(".claude/skills/shepherd");
+    if ours(&legacy) {
+        std::fs::remove_dir_all(&legacy)?;
+    }
+    if exe.is_some() {
+        std::fs::create_dir_all(plugin.join(".claude-plugin"))?;
+        std::fs::write(plugin.join(".claude-plugin/plugin.json"), "{\"name\": \"shepherd\", \"description\": \"Shepherd's skill for its agents\"}\n")?;
+    }
+    for dir in dirs(home, plugin) {
         if dir.exists() && !ours(&dir) {
             continue;
         }
@@ -290,7 +323,7 @@ mod tests {
     #[test]
     fn a_machine_gets_the_herdr_guide_and_keeps_the_users_own() {
         let home = tempfile::tempdir().unwrap();
-        let [claude, agents] = dirs(home.path());
+        let (claude, agents) = (home.path().join(".claude/skills/shepherd"), home.path().join(".agents/skills/shepherd"));
         std::fs::create_dir_all(&agents).unwrap();
         std::fs::write(agents.join("SKILL.md"), "mine").unwrap();
         // as `herdr::ssh` runs it: `sh -c '…'`
@@ -308,22 +341,24 @@ mod tests {
     }
 
     #[test]
-    fn leaves_the_users_own() {
+    fn the_skill_goes_to_the_plugin_and_leaves_the_users_own() {
         let home = tempfile::tempdir().unwrap();
-        let [claude, agents] = dirs(home.path());
-        std::fs::create_dir_all(claude.join("backends")).unwrap();
-        std::fs::write(claude.join("SKILL.md"), format!("{MARK} once -->")).unwrap();
-        std::fs::write(claude.join("backends/rex.md"), "old").unwrap();
+        let plugin = home.path().join("plugin");
+        let [claude, agents] = dirs(home.path(), &plugin);
+        let legacy = home.path().join(".claude/skills/shepherd");
+        std::fs::create_dir_all(legacy.join("backends")).unwrap();
+        std::fs::write(legacy.join("SKILL.md"), format!("{MARK} once -->")).unwrap();
         std::fs::create_dir_all(&agents).unwrap();
         std::fs::write(agents.join("SKILL.md"), "---\nname: shepherd\n---\nmine").unwrap();
 
-        set_in(home.path(), Some(Path::new("/Applications/It's.app/shepherd"))).unwrap();
+        set_in(home.path(), &plugin, Some(Path::new("/Applications/It's.app/shepherd"))).unwrap();
         let skill = std::fs::read_to_string(claude.join("SKILL.md")).unwrap();
         assert!(skill.starts_with("---\nname: shepherd\n") && skill.contains(r"Run `'/Applications/It'\''s.app/shepherd' skill`"), "{skill}");
-        assert!(!claude.join("backends").exists(), "an older Shepherd's files gone");
+        assert!(plugin.join(".claude-plugin/plugin.json").exists());
+        assert!(!legacy.exists(), "out of the folder every Claude Code reads");
         assert_eq!(std::fs::read_to_string(agents.join("SKILL.md")).unwrap(), "---\nname: shepherd\n---\nmine", "not overwritten");
 
-        set_in(home.path(), None).unwrap();
+        set_in(home.path(), &plugin, None).unwrap();
         assert!(!claude.exists());
         assert!(agents.join("SKILL.md").exists(), "not removed");
     }

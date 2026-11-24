@@ -474,7 +474,7 @@ impl Render for SettingsView {
                             true,
                             "agent-skill",
                             "Agent skill",
-                            "Claude Code, Codex and Pi in the panes learn to start, follow and clean up after other agents on this backend: the shepherd skill in ~/.claude/skills and ~/.agents/skills, here and on the herdr machine shown.",
+                            "Claude Code, Codex and Pi in the panes learn to start, follow and clean up after other agents on this backend: the shepherd skill, for Claude Code only in the terminals of servers Shepherd started, and in ~/.agents/skills, here and on the herdr machine shown.",
                             on,
                         )
                         .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
